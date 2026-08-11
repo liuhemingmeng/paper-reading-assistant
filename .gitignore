@@ -17,6 +17,9 @@ venv/
 *.json
 !data/.gitkeep
 
+# WorkBuddy project metadata
+.workbuddy/
+
 # IDE and OS files
 .vscode/
 .idea/
