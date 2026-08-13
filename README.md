@@ -78,8 +78,8 @@ python -m todo_cli --data-file data/demo.json list
 文件批处理默认只预览，不修改文件：
 
 ```bash
-python scripts/file_batch.py data --suffix .txt --prefix demo_
-python scripts/file_batch.py data --suffix .txt --prefix demo_ --apply
+python scripts/file_batch.py data --prefix demo
+python scripts/file_batch.py data --prefix demo --apply
 ```
 
 JSON/CSV 读写：
@@ -126,6 +126,12 @@ python -m pytest -q
 ```
 
 当前预期结果：`7 passed`。
+
+## 教程
+
+每个完成的项目阶段都会在 `docs/tutorials/` 产出一份 HTML 教程，讲解真实实现、设计原因、常见错误、验证方法和后续迁移路径。
+
+- [第 1 周：Python 工程底座教程](docs/tutorials/week-01-python-foundation.html)
 
 也可以检查所有 Python 文件是否能编译：
 
