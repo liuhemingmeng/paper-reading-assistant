@@ -6,7 +6,11 @@ __pycache__/
 
 # Virtual environment
 .venv/
+.venv-broken/
+.venv-corrupt-20260813/
+.venv-corrupt-20260813-retry/
 .venv-clean/
+.venv-stage3/
 venv/
 
 # Environment variables and secrets
@@ -17,6 +21,8 @@ venv/
 # Generated data
 *.db
 *.json
+data/uploads/
+data/local-acceptance.pdf
 !data/.gitkeep
 
 # WorkBuddy project metadata

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -65,3 +66,54 @@ class PaperRead(BaseModel):
     file_path: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class PaperDocumentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    paper_id: int
+    original_filename: str
+    storage_path: str
+    file_size: int
+    page_count: int
+    status: str
+    created_at: datetime
+
+
+class PaperChunkRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    sequence: int
+    page_number: int
+    section_title: str | None
+    content: str
+    char_count: int
+
+
+class PaperInsightRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    paper_id: int
+    summary: str
+    questions: list[str]
+    model: str
+    status: str
+    error_message: str | None
+    created_at: datetime
+
+    @classmethod
+    def from_record(cls, record: object) -> "PaperInsightRead":
+        questions = json.loads(str(getattr(record, "questions_json")))
+        return cls(
+            id=int(getattr(record, "id")),
+            paper_id=int(getattr(record, "paper_id")),
+            summary=str(getattr(record, "summary")),
+            questions=questions,
+            model=str(getattr(record, "model")),
+            status=str(getattr(record, "status")),
+            error_message=getattr(record, "error_message"),
+            created_at=getattr(record, "created_at"),
+        )

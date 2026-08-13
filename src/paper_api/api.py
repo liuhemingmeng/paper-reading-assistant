@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from pathlib import Path
+
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from .database import (
@@ -12,20 +14,44 @@ from .database import (
     create_tables,
     get_session,
 )
-from .schemas import PaperCreate, PaperRead, PaperUpdate
-from .services import PaperNotFoundError, create_paper, delete_paper, get_paper, list_papers, update_paper
+from .llm_client import LLMConfigurationError, LLMResponseError, OpenAICompatibleClient
+from .pdf_processing import PDFProcessingError, UPLOAD_ROOT, chunk_pages, extract_pdf_pages, save_upload
+from .schemas import (
+    PaperChunkRead,
+    PaperCreate,
+    PaperDocumentRead,
+    PaperInsightRead,
+    PaperRead,
+    PaperUpdate,
+)
+from .services import (
+    DocumentNotFoundError,
+    InsightNotFoundError,
+    PaperNotFoundError,
+    create_paper,
+    delete_paper,
+    generate_insight,
+    get_document,
+    get_latest_insight,
+    get_paper,
+    list_chunks,
+    list_papers,
+    save_processed_document,
+    update_paper,
+)
 
 
-def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
+def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPLOAD_ROOT) -> FastAPI:
     engine = create_engine_for_url(database_url)
     session_factory = create_session_factory(engine)
     create_tables(engine)
 
     app = FastAPI(
         title="Paper Reading Assistant API",
-        version="0.2.0",
-        description="Manage paper metadata before PDF parsing and RAG are added.",
+        version="0.3.0",
+        description="Manage paper metadata, parse PDFs, and generate LLM reading insights.",
     )
+    app.state.session_factory = session_factory
 
     def get_db_session():
         yield from get_session(session_factory)
@@ -44,10 +70,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         limit: int = 20,
         session: Session = Depends(get_db_session),
     ) -> list[PaperRead]:
-        if offset < 0:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="offset must be >= 0")
-        if not 1 <= limit <= 100:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="limit must be between 1 and 100")
+        validate_pagination(offset, limit)
         return list_papers(session, offset, limit)
 
     @app.get("/papers/{paper_id}", response_model=PaperRead)
@@ -55,7 +78,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         try:
             return get_paper(session, paper_id)
         except PaperNotFoundError as error:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+            raise not_found(error) from error
 
     @app.patch("/papers/{paper_id}", response_model=PaperRead)
     def update_paper_route(
@@ -66,17 +89,96 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         try:
             return update_paper(session, paper_id, data)
         except PaperNotFoundError as error:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+            raise not_found(error) from error
 
     @app.delete("/papers/{paper_id}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_paper_route(paper_id: int, session: Session = Depends(get_db_session)) -> Response:
         try:
             delete_paper(session, paper_id)
         except PaperNotFoundError as error:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+            raise not_found(error) from error
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @app.post("/papers/{paper_id}/document", response_model=PaperDocumentRead, status_code=status.HTTP_201_CREATED)
+    async def upload_document_route(
+        paper_id: int,
+        file: UploadFile = File(...),
+        session: Session = Depends(get_db_session),
+    ) -> PaperDocumentRead:
+        try:
+            get_paper(session, paper_id)
+            storage_path, file_size = await save_upload(file, paper_id, root=upload_root)
+            try:
+                pages = extract_pdf_pages(storage_path)
+                chunks = chunk_pages(pages)
+                return save_processed_document(
+                    session=session,
+                    paper_id=paper_id,
+                    original_filename=file.filename or "uploaded.pdf",
+                    storage_path=storage_path,
+                    file_size=file_size,
+                    pages=pages,
+                    chunks=chunks,
+                )
+            except PDFProcessingError:
+                storage_path.unlink(missing_ok=True)
+                raise
+        except PaperNotFoundError as error:
+            raise not_found(error) from error
+        except PDFProcessingError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+
+    @app.get("/papers/{paper_id}/document", response_model=PaperDocumentRead)
+    def get_document_route(paper_id: int, session: Session = Depends(get_db_session)) -> PaperDocumentRead:
+        try:
+            return get_document(session, paper_id)
+        except (PaperNotFoundError, DocumentNotFoundError) as error:
+            raise not_found(error) from error
+
+    @app.get("/papers/{paper_id}/chunks", response_model=list[PaperChunkRead])
+    def list_chunks_route(
+        paper_id: int,
+        offset: int = 0,
+        limit: int = 100,
+        session: Session = Depends(get_db_session),
+    ) -> list[PaperChunkRead]:
+        validate_pagination(offset, limit)
+        try:
+            return list_chunks(session, paper_id, offset, limit)
+        except (PaperNotFoundError, DocumentNotFoundError) as error:
+            raise not_found(error) from error
+
+    @app.post("/papers/{paper_id}/insights:generate", response_model=PaperInsightRead, status_code=status.HTTP_201_CREATED)
+    def generate_insight_route(paper_id: int, session: Session = Depends(get_db_session)) -> PaperInsightRead:
+        try:
+            record = generate_insight(session, paper_id, OpenAICompatibleClient.from_environment())
+            return PaperInsightRead.from_record(record)
+        except (PaperNotFoundError, DocumentNotFoundError) as error:
+            raise not_found(error) from error
+        except LLMConfigurationError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        except LLMResponseError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+
+    @app.get("/papers/{paper_id}/insight", response_model=PaperInsightRead)
+    def get_insight_route(paper_id: int, session: Session = Depends(get_db_session)) -> PaperInsightRead:
+        try:
+            return PaperInsightRead.from_record(get_latest_insight(session, paper_id))
+        except (PaperNotFoundError, InsightNotFoundError) as error:
+            raise not_found(error) from error
+
     return app
+
+
+def validate_pagination(offset: int, limit: int) -> None:
+    if offset < 0:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="offset must be >= 0")
+    if not 1 <= limit <= 100:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="limit must be between 1 and 100")
+
+
+def not_found(error: Exception) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
 
 
 app = create_app()

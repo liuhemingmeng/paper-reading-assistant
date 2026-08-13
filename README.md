@@ -26,6 +26,12 @@
   - Pydantic v2 请求/响应校验。
   - SQLAlchemy ORM 与 SQLite 文件数据库。
   - FastAPI TestClient 接口测试。
+- PDF 解析与阅读洞见 API（第 3 周）：
+  - 受限 PDF 上传、UUID 文件名保存、10 MiB 上限与无效文件清理。
+  - PyMuPDF 逐页文本提取、页码/章节可追溯分块。
+  - 文档、文本块与阅读洞见的 SQLite 持久化。
+  - OpenAI 兼容 LLM 客户端：结构化摘要、5 个问题、有限重试和配置错误保护。
+  - Fake LLM、上传失败和重传替换等完整流程测试。
 
 ## 环境要求
 
@@ -113,6 +119,51 @@ curl -X DELETE http://127.0.0.1:8000/papers/1
 
 接口契约和字段约束见 [第 2 周 API 设计](docs/week-02-api-design.md)。
 
+## PDF 上传与阅读洞见（第 3 周）
+
+先按上文启动 API。创建一条论文后，使用 `multipart/form-data` 上传 PDF：
+
+```bash
+curl -X POST http://127.0.0.1:8000/papers/1/document \
+  -F "file=@./example.pdf;type=application/pdf"
+```
+
+上传成功后，服务会把文件保存至 `data/uploads/paper-1/`，提取每页文本并建立可追溯的文本块。上传文件、SQLite 数据库以及真实 `.env` 都是本地状态，已被 Git 忽略。
+
+```bash
+curl http://127.0.0.1:8000/papers/1/document
+curl http://127.0.0.1:8000/papers/1/chunks?offset=0\&limit=100
+```
+
+PDF 当前必须满足以下限制：仅 `.pdf` 后缀、MIME 类型为 `application/pdf`（或缺失/通用二进制类型）、文件不超过 10 MiB，且必须包含可提取的文本层。扫描件需要 OCR，属于后续阶段而非本周范围。
+
+### 配置真实 LLM（可选）
+
+复制模板后，只在本机 `.env` 填入 OpenAI 兼容服务的地址、密钥和模型名：
+
+```bash
+# Windows PowerShell
+Copy-Item .env.example .env
+
+# macOS/Linux
+cp .env.example .env
+```
+
+```text
+LLM_BASE_URL=https://api.example.com/v1
+LLM_API_KEY=replace-with-your-secret
+LLM_MODEL=replace-with-your-model-name
+```
+
+随后可请求结构化的摘要与 5 个阅读问题：
+
+```bash
+curl -X POST http://127.0.0.1:8000/papers/1/insights:generate
+curl http://127.0.0.1:8000/papers/1/insight
+```
+
+未配置这些变量时，生成接口会明确返回 `503`，不会把请求发送到未知服务。具体数据模型与边界见 [第 3 周 PDF/LLM 设计](docs/week-03-pdf-llm-design.md)。
+
 ## 基础脚本示例
 
 文件批处理默认只预览，不修改文件：
@@ -165,7 +216,7 @@ python scripts/api_client.py https://httpbin.org/json --output data/api_response
 python -m pytest -q
 ```
 
-当前预期结果：`7 passed`。
+当前预期结果：`24 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理，以及 Fake LLM 洞见持久化。
 
 ## 教程
 
@@ -173,6 +224,7 @@ python -m pytest -q
 
 - [第 1 周：Python 工程底座教程](docs/tutorials/week-01-python-foundation.html)
 - [第 2 周：FastAPI + SQLite 论文管理 API 教程](docs/tutorials/week-02-fastapi-sqlite.html)
+- [第 3 周：PDF 解析与 LLM 阅读洞见教程](docs/tutorials/week-03-pdf-llm.html)
 
 也可以检查所有 Python 文件是否能编译：
 
@@ -191,8 +243,12 @@ python -m compileall -q scripts src tests
 ├── requirements.txt
 ├── scripts/
 ├── src/
-│   └── todo_cli/
+│   ├── todo_cli/
+│   └── paper_api/
 ├── tests/
+├── docs/
+│   ├── tutorials/
+│   └── week-03-pdf-llm-design.md
 └── data/
 ```
 
@@ -207,7 +263,10 @@ python -m compileall -q scripts src tests
 - 用有限重试和指数退避处理临时网络故障。
 - 用 pytest 和临时目录测试文件存储，避免污染真实数据。
 - 用小而清晰的 Git 提交记录工程演进过程。
+- 用 `UploadFile` 分块落盘，而不是将任意文件一次性读入内存。
+- 用页码、章节名、序号维护文本来源，给后续 RAG 回答提供可引用证据。
+- 将外部 LLM API 封装为可替换客户端，并把配置、重试、响应校验放在边界层。
 
 ## 下一步
 
-第 2 周将把 Todo CLI 的工程基础迁移到论文管理场景，使用 FastAPI 和 SQLite 实现论文条目的增删改查 API，并补充接口测试。
+第 4 周将在 `PaperChunk` 上构建向量索引和检索链路，再让 RAG 回答携带来源页码。此时第 3 周保存的分块、序号与页码就是检索和可解释回答的基础。
