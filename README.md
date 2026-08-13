@@ -20,7 +20,12 @@
   - `delete` 删除任务。
   - JSON 文件持久化。
   - 日志与错误处理。
-- 7 个 pytest 测试，覆盖存储读写和 Todo 生命周期。
+- JSON Todo CLI 与 7 个 pytest 测试，覆盖存储读写和 Todo 生命周期。
+- FastAPI + SQLite 论文管理 API：
+  - 创建、分页查询、单篇查询、局部更新和删除论文元数据。
+  - Pydantic v2 请求/响应校验。
+  - SQLAlchemy ORM 与 SQLite 文件数据库。
+  - FastAPI TestClient 接口测试。
 
 ## 环境要求
 
@@ -72,6 +77,41 @@ python -m todo_cli delete 1
 python -m todo_cli --data-file data/demo.json add "Learn pathlib"
 python -m todo_cli --data-file data/demo.json list
 ```
+
+## 论文管理 API（第 2 周）
+
+启动开发服务器：
+
+```bash
+python -m paper_api
+```
+
+服务默认运行在 `http://127.0.0.1:8000`。启动后可打开：
+
+- 交互式 API 文档：`http://127.0.0.1:8000/docs`
+- OpenAPI JSON：`http://127.0.0.1:8000/openapi.json`
+- 健康检查：`http://127.0.0.1:8000/health`
+
+API 使用 SQLite 数据库 `data/papers.db`，首次启动时会自动创建表。数据库文件是本地生成数据，已被 Git 忽略。
+
+创建论文：
+
+```bash
+curl -X POST http://127.0.0.1:8000/papers \
+  -H "Content-Type: application/json" \
+  -d '{"title":"RAG Survey","authors":"Lewis, Patrick","abstract":"A survey of retrieval-augmented generation."}'
+```
+
+查询、更新和删除：
+
+```bash
+curl http://127.0.0.1:8000/papers?offset=0\&limit=20
+curl http://127.0.0.1:8000/papers/1
+curl -X PATCH http://127.0.0.1:8000/papers/1 -H "Content-Type: application/json" -d '{"title":"Updated RAG Survey"}'
+curl -X DELETE http://127.0.0.1:8000/papers/1
+```
+
+接口契约和字段约束见 [第 2 周 API 设计](docs/week-02-api-design.md)。
 
 ## 基础脚本示例
 
@@ -132,6 +172,7 @@ python -m pytest -q
 每个完成的项目阶段都会在 `docs/tutorials/` 产出一份 HTML 教程，讲解真实实现、设计原因、常见错误、验证方法和后续迁移路径。
 
 - [第 1 周：Python 工程底座教程](docs/tutorials/week-01-python-foundation.html)
+- [第 2 周：FastAPI + SQLite 论文管理 API 教程](docs/tutorials/week-02-fastapi-sqlite.html)
 
 也可以检查所有 Python 文件是否能编译：
 
