@@ -92,6 +92,42 @@ class PaperChunkRead(BaseModel):
     char_count: int
 
 
+class EvaluationCaseRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1_000)
+    expected_page_numbers: list[int] = Field(min_length=1, max_length=10)
+
+    @field_validator("question")
+    @classmethod
+    def strip_question(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("expected_page_numbers")
+    @classmethod
+    def validate_expected_pages(cls, value: list[int]) -> list[int]:
+        if any(page < 1 for page in value):
+            raise ValueError("page numbers must be positive")
+        return value
+
+
+class EvaluationCaseResultRead(BaseModel):
+    question: str
+    expected_page_numbers: list[int]
+    retrieved_page_numbers: list[int]
+    hit: bool
+    reciprocal_rank: float
+
+
+class RetrievalEvaluationRead(BaseModel):
+    k: int
+    case_count: int
+    recall_at_k: float
+    mean_reciprocal_rank: float
+    results: list[EvaluationCaseResultRead]
+
+
 class RetrievalResultRead(BaseModel):
     chunk_id: int
     sequence: int

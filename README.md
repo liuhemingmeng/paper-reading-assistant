@@ -37,6 +37,10 @@
   - 内置无依赖、可复现的 hashing vector 基线，用于建立 SQLite chunk 索引。
   - Top-K 余弦检索返回文本、相似度、页码和章节引用。
   - 问答仅使用检索证据，并把同一批证据作为 citations 返回。
+- RAG 检索评测（第 5 周）：
+  - 以“问题 → 目标证据页码”构造固定、可审计的评测集。
+  - 提供逐题命中明细、Recall@K 与 MRR 指标。
+  - 可离线回归检索质量，不依赖 LLM 密钥或网络。
 
 ## 环境要求
 
@@ -188,6 +192,21 @@ curl -X POST "http://127.0.0.1:8000/papers/1/questions:answer?question=How%20doe
 
 响应中的 `citations` 与送入模型的证据一一对应。未建索引返回 `409`，空问题或无相关证据返回 `422`，未配置 LLM 时问答返回 `503`。设计取舍见 [第 4 周 RAG 设计](docs/week-04-rag-design.md)。
 
+## RAG 检索评测（第 5 周）
+
+在索引完成后，以人工标注的“问题 → 目标证据页码”运行评测。接口返回每题的检索页码、命中结果和倒数排名，并汇总 `Recall@K` 与 `MRR`：
+
+```bash
+curl -X POST "http://127.0.0.1:8000/papers/1/retrieval:evaluate?k=3" \
+  -H "Content-Type: application/json" \
+  -d '[
+    {"question":"What finds relevant evidence?","expected_page_numbers":[1]},
+    {"question":"What measures ranking quality?","expected_page_numbers":[2]}
+  ]'
+```
+
+`Recall@K` 表示有多少问题在前 K 个结果中找到了至少一个目标页；`MRR` 额外关注第一个目标页的排名。该评测先覆盖检索质量，回答忠实度仍需后续人工标注或裁判模型评测。详细定义见 [第 5 周评测设计](docs/week-05-evaluation-design.md)。
+
 ## 基础脚本示例
 
 文件批处理默认只预览，不修改文件：
@@ -240,7 +259,7 @@ python scripts/api_client.py https://httpbin.org/json --output data/api_response
 python -m pytest -q
 ```
 
-当前预期结果：`28 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理、本地向量索引、Top-K 引用检索，以及 Fake LLM 洞见与 RAG 回答边界。
+当前预期结果：`31 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理、本地向量索引、Top-K 引用检索、RAG 回答边界，以及 Recall@K/MRR 评测指标。
 
 ## 教程
 
@@ -250,6 +269,7 @@ python -m pytest -q
 - [第 2 周：FastAPI + SQLite 论文管理 API 教程](docs/tutorials/week-02-fastapi-sqlite.html)
 - [第 3 周：PDF 解析与 LLM 阅读洞见教程](docs/tutorials/week-03-pdf-llm.html)
 - [第 4 周：本地 RAG 检索与可引用问答教程](docs/tutorials/week-04-rag-retrieval.html)
+- [第 5 周：RAG 检索与引用评测教程](docs/tutorials/week-05-rag-evaluation.html)
 
 也可以检查所有 Python 文件是否能编译：
 
@@ -274,7 +294,8 @@ python -m compileall -q scripts src tests
 ├── docs/
 │   ├── tutorials/
 │   ├── week-03-pdf-llm-design.md
-│   └── week-04-rag-design.md
+│   ├── week-04-rag-design.md
+│   └── week-05-evaluation-design.md
 └── data/
 ```
 
@@ -295,7 +316,10 @@ python -m compileall -q scripts src tests
 - 区分 embedding、索引、检索、生成四个 RAG 阶段，而不是把它们混成一次模型调用。
 - 使用余弦相似度排序 Top-K evidence，并在最终回答中原样返回 citations。
 - 用接口协议和 FakeGenerator 隔离外部模型，使检索和引用链路可离线测试。
+- 用固定问题和目标证据页码建立可复现的 retrieval evaluation set。
+- 区分“前 K 个结果是否命中”的 Recall@K 与“第一个命中排第几”的 MRR。
+- 用逐题结果审计汇总指标，避免只看一个看似漂亮的平均分。
 
 ## 下一步
 
-第 5 周将用固定问题集评估检索命中和答案引用质量，再接入真实 embedding 或向量库作为对照。当前的本地 hashing baseline 是理解端到端 RAG、建立可回归评测的起点，不是最终检索模型。
+第 6 周将引入真实 embedding 的可替换实现，使用同一份固定评测集对比 Recall@K 与 MRR；再扩展 citation correctness 与 answer faithfulness 的人工标注或裁判模型评测。

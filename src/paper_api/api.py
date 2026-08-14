@@ -14,9 +14,12 @@ from .database import (
     create_tables,
     get_session,
 )
+from .evaluation import EvaluationCase, evaluate_retrieval
 from .llm_client import LLMConfigurationError, LLMResponseError, OpenAICompatibleClient
 from .pdf_processing import PDFProcessingError, UPLOAD_ROOT, chunk_pages, extract_pdf_pages, save_upload
 from .schemas import (
+    EvaluationCaseRequest,
+    EvaluationCaseResultRead,
     GroundedAnswerRead,
     PaperChunkRead,
     PaperCreate,
@@ -24,6 +27,7 @@ from .schemas import (
     PaperInsightRead,
     PaperRead,
     PaperUpdate,
+    RetrievalEvaluationRead,
     RetrievalIndexRead,
     RetrievalResultRead,
 )
@@ -56,8 +60,8 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPL
 
     app = FastAPI(
         title="Paper Reading Assistant API",
-        version="0.4.0",
-        description="Manage papers, parse PDFs, retrieve source-aware evidence, and generate grounded answers.",
+        version="0.5.0",
+        description="Manage papers, parse PDFs, retrieve source-aware evidence, answer with citations, and evaluate retrieval.",
     )
     app.state.session_factory = session_factory
 
@@ -191,6 +195,46 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPL
         except (NoRelevantEvidenceError, ValueError) as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
 
+    @app.post("/papers/{paper_id}/retrieval:evaluate", response_model=RetrievalEvaluationRead)
+    def evaluate_retrieval_route(
+        paper_id: int,
+        cases: list[EvaluationCaseRequest],
+        k: int = 3,
+        session: Session = Depends(get_db_session),
+    ) -> RetrievalEvaluationRead:
+        validate_retrieval_limit(k)
+        try:
+            report = evaluate_retrieval(
+                [
+                    EvaluationCase(question=case.question, expected_page_numbers=case.expected_page_numbers)
+                    for case in cases
+                ],
+                lambda question, limit: retrieve_page_numbers_for_evaluation(session, paper_id, question, limit),
+                k,
+            )
+            return RetrievalEvaluationRead(
+                k=report.k,
+                case_count=report.case_count,
+                recall_at_k=round(report.recall_at_k, 6),
+                mean_reciprocal_rank=round(report.mean_reciprocal_rank, 6),
+                results=[
+                    EvaluationCaseResultRead(
+                        question=result.question,
+                        expected_page_numbers=result.expected_page_numbers,
+                        retrieved_page_numbers=result.retrieved_page_numbers,
+                        hit=result.hit,
+                        reciprocal_rank=result.reciprocal_rank,
+                    )
+                    for result in report.results
+                ],
+            )
+        except (PaperNotFoundError, DocumentNotFoundError) as error:
+            raise not_found(error) from error
+        except RetrievalNotReadyError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except (NoRelevantEvidenceError, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+
     @app.post("/papers/{paper_id}/questions:answer", response_model=GroundedAnswerRead)
     def answer_question_route(
         paper_id: int,
@@ -260,6 +304,13 @@ def validate_pagination(offset: int, limit: int) -> None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="offset must be >= 0")
     if not 1 <= limit <= 100:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="limit must be between 1 and 100")
+
+
+def retrieve_page_numbers_for_evaluation(session: Session, paper_id: int, question: str, limit: int) -> list[int]:
+    try:
+        return [chunk.page_number for chunk, _ in retrieve_chunks(session, paper_id, question, limit=limit)]
+    except NoRelevantEvidenceError:
+        return []
 
 
 def validate_retrieval_limit(limit: int) -> None:

@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from paper_api.api import create_app
+from paper_api.evaluation import EvaluationCase, evaluate_retrieval
 from paper_api.llm_client import GroundedAnswer, ReadingInsight
 from paper_api.models import PaperInsight
 from paper_api.services import answer_question, build_retrieval_index, generate_insight, retrieve_chunks
@@ -189,6 +190,68 @@ def test_retrieval_rejects_irrelevant_or_blank_query(client: TestClient) -> None
     assert blank.status_code == 422
     unrelated = client.get(f"/papers/{paper_id}/search", params={"query": "quantum banana"})
     assert unrelated.status_code == 422
+
+
+def test_retrieval_evaluation_reports_recall_and_mrr(client: TestClient) -> None:
+    paper_id = create_paper(client)
+    assert upload_pdf(
+        client,
+        paper_id,
+        pdf_bytes(
+            "1 Retrieval\nRetrieval finds relevant evidence before generation.",
+            "2 Evaluation\nEvaluation measures ranking quality with recall and MRR.",
+        ),
+    ).status_code == 201
+    assert client.post(f"/papers/{paper_id}/retrieval:index").status_code == 200
+
+    response = client.post(
+        f"/papers/{paper_id}/retrieval:evaluate?k=1",
+        json=[
+            {"question": "What finds relevant evidence?", "expected_page_numbers": [1]},
+            {"question": "What measures ranking quality?", "expected_page_numbers": [2]},
+        ],
+    )
+
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report["k"] == 1
+    assert report["case_count"] == 2
+    assert report["recall_at_k"] == 1.0
+    assert report["mean_reciprocal_rank"] == 1.0
+    assert [item["retrieved_page_numbers"] for item in report["results"]] == [[1], [2]]
+
+
+def test_evaluation_rejects_unindexed_and_invalid_cases(client: TestClient) -> None:
+    paper_id = create_paper(client)
+    assert upload_pdf(client, paper_id, pdf_bytes("Known evidence appears here.")).status_code == 201
+
+    unindexed = client.post(
+        f"/papers/{paper_id}/retrieval:evaluate",
+        json=[{"question": "What appears?", "expected_page_numbers": [1]}],
+    )
+    assert unindexed.status_code == 409
+
+    invalid = client.post(
+        f"/papers/{paper_id}/retrieval:evaluate",
+        json=[{"question": "", "expected_page_numbers": [0]}],
+    )
+    assert invalid.status_code == 422
+
+
+def test_evaluation_metric_math_uses_first_relevant_rank() -> None:
+    report = evaluate_retrieval(
+        [
+            EvaluationCase(question="first", expected_page_numbers=[2]),
+            EvaluationCase(question="second", expected_page_numbers=[4]),
+            EvaluationCase(question="miss", expected_page_numbers=[9]),
+        ],
+        lambda question, k: {"first": [1, 2, 3], "second": [4, 1, 2], "miss": [1, 2, 3]}[question][:k],
+        k=3,
+    )
+
+    assert report.recall_at_k == pytest.approx(2 / 3)
+    assert report.mean_reciprocal_rank == pytest.approx((0.5 + 1.0 + 0.0) / 3)
+    assert report.results[0].reciprocal_rank == 0.5
 
 
 def test_answer_route_requires_llm_configuration_after_indexing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

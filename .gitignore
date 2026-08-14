@@ -23,6 +23,7 @@ venv/
 *.json
 data/uploads/
 data/local-acceptance.pdf
+data/week5-acceptance.pdf
 !data/.gitkeep
 
 # WorkBuddy project metadata
