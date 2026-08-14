@@ -7,9 +7,17 @@ from fastapi.testclient import TestClient
 
 from paper_api.api import create_app
 from paper_api.evaluation import EvaluationCase, evaluate_retrieval
+from paper_api.embeddings import OpenAICompatibleEmbedder, get_default_embedder
 from paper_api.llm_client import GroundedAnswer, ReadingInsight
 from paper_api.models import PaperInsight
-from paper_api.services import answer_question, build_retrieval_index, generate_insight, retrieve_chunks
+from paper_api.retrieval import EmbeddedText, LocalHashingEmbedder, TextEmbedder
+from paper_api.services import (
+    RetrievalNotReadyError,
+    answer_question,
+    build_retrieval_index,
+    generate_insight,
+    retrieve_chunks,
+)
 
 
 @pytest.fixture
@@ -308,3 +316,98 @@ def test_insight_route_requires_llm_configuration(client: TestClient, monkeypatc
 
     assert response.status_code == 503
     assert "LLM_BASE_URL" in response.json()["detail"]
+
+
+class LabeledFakeEmbedder:
+    """Deterministic embedder used to prove the TextEmbedder protocol is pluggable."""
+
+    def __init__(self, model: str = "fake-v1") -> None:
+        self.model = model
+
+    def embed(self, text: str) -> EmbeddedText:
+        hits = 1.0 if "evidence" in text.lower() else 0.0
+        return EmbeddedText(vector=[hits, 1.0 - hits], model=self.model)
+
+
+def test_openai_compatible_embedder_returns_normalized_vector(monkeypatch: pytest.MonkeyPatch) -> None:
+    import paper_api.embeddings as embeddings_mod
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": [{"embedding": [3.0, 4.0]}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def post(self, *args, **kwargs) -> FakeResponse:
+            return FakeResponse()
+
+    monkeypatch.setattr(embeddings_mod.httpx, "Client", FakeClient)
+    embedder = OpenAICompatibleEmbedder(base_url="https://api.example.com/v1", api_key="k", model="emb-model")
+    embedded = embedder.embed("hello")
+
+    assert embedded.model == "emb-model"
+    assert embedded.vector == pytest.approx([0.6, 0.8])
+
+
+def test_get_default_embedder_falls_back_to_local_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EMBEDDING_BASE_URL", raising=False)
+    monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
+    monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+
+    assert isinstance(get_default_embedder(), LocalHashingEmbedder)
+
+
+def test_get_default_embedder_uses_real_embedder_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EMBEDDING_BASE_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "k")
+    monkeypatch.setenv("EMBEDDING_MODEL", "emb-model")
+
+    embedder = get_default_embedder()
+    assert isinstance(embedder, OpenAICompatibleEmbedder)
+    assert embedder.model == "emb-model"
+
+
+def test_injected_fake_embedder_indexes_and_retrieves(tmp_path: Path) -> None:
+    with TestClient(
+        create_app("sqlite://", upload_root=tmp_path / "uploads", embedder=LabeledFakeEmbedder("fake-v1"))
+    ) as client:
+        paper_id = create_paper(client)
+        assert upload_pdf(
+            client,
+            paper_id,
+            pdf_bytes("1 Evidence\nThis passage contains the evidence.", "2 Other\nUnrelated content."),
+        ).status_code == 201
+        assert client.post(f"/papers/{paper_id}/retrieval:index").status_code == 200
+
+        search = client.get(f"/papers/{paper_id}/search", params={"query": "where is the evidence"})
+        assert search.status_code == 200, search.text
+        assert search.json()[0]["page_number"] == 1
+
+
+def test_retrieval_guards_against_mixed_embedder_models(tmp_path: Path) -> None:
+    with TestClient(
+        create_app("sqlite://", upload_root=tmp_path / "uploads", embedder=LabeledFakeEmbedder("fake-v1"))
+    ) as client:
+        paper_id = create_paper(client)
+        assert upload_pdf(client, paper_id, pdf_bytes("Evidence only here.")).status_code == 201
+
+        session = client.app.state.session_factory()
+        try:
+            build_retrieval_index(session, paper_id, embedder=LabeledFakeEmbedder("fake-v1"))
+            with pytest.raises(RetrievalNotReadyError):
+                retrieve_chunks(session, paper_id, "evidence", embedder=LabeledFakeEmbedder("fake-v2"))
+        finally:
+            session.close()

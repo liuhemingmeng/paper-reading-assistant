@@ -14,9 +14,11 @@ from .database import (
     create_tables,
     get_session,
 )
+from .embeddings import EmbeddingConfigurationError, EmbeddingResponseError, get_default_embedder
 from .evaluation import EvaluationCase, evaluate_retrieval
 from .llm_client import LLMConfigurationError, LLMResponseError, OpenAICompatibleClient
 from .pdf_processing import PDFProcessingError, UPLOAD_ROOT, chunk_pages, extract_pdf_pages, save_upload
+from .retrieval import TextEmbedder
 from .schemas import (
     EvaluationCaseRequest,
     EvaluationCaseResultRead,
@@ -53,17 +55,22 @@ from .services import (
 )
 
 
-def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPLOAD_ROOT) -> FastAPI:
+def create_app(
+    database_url: str = DEFAULT_DATABASE_URL,
+    upload_root: Path = UPLOAD_ROOT,
+    embedder: TextEmbedder | None = None,
+) -> FastAPI:
     engine = create_engine_for_url(database_url)
     session_factory = create_session_factory(engine)
     create_tables(engine)
 
     app = FastAPI(
         title="Paper Reading Assistant API",
-        version="0.5.0",
-        description="Manage papers, parse PDFs, retrieve source-aware evidence, answer with citations, and evaluate retrieval.",
+        version="0.6.0",
+        description="Manage papers, parse PDFs, retrieve source-aware evidence with a configurable embedder, answer with citations, and evaluate retrieval.",
     )
     app.state.session_factory = session_factory
+    app.state.embedder = embedder or get_default_embedder()
 
     def get_db_session():
         yield from get_session(session_factory)
@@ -163,10 +170,12 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPL
     @app.post("/papers/{paper_id}/retrieval:index", response_model=RetrievalIndexRead)
     def index_document_route(paper_id: int, session: Session = Depends(get_db_session)) -> RetrievalIndexRead:
         try:
-            model, indexed_chunks = build_retrieval_index(session, paper_id)
+            model, indexed_chunks = build_retrieval_index(session, paper_id, embedder=app.state.embedder)
             return RetrievalIndexRead(paper_id=paper_id, model=model, indexed_chunks=indexed_chunks)
         except (PaperNotFoundError, DocumentNotFoundError) as error:
             raise not_found(error) from error
+        except EmbeddingResponseError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
 
     @app.get("/papers/{paper_id}/search", response_model=list[RetrievalResultRead])
     def search_paper_route(
@@ -186,12 +195,14 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPL
                     content=chunk.content,
                     score=round(score, 6),
                 )
-                for chunk, score in retrieve_chunks(session, paper_id, query, limit=limit)
+                for chunk, score in retrieve_chunks(session, paper_id, query, limit=limit, embedder=app.state.embedder)
             ]
         except (PaperNotFoundError, DocumentNotFoundError) as error:
             raise not_found(error) from error
         except RetrievalNotReadyError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except EmbeddingResponseError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
         except (NoRelevantEvidenceError, ValueError) as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
 
@@ -209,7 +220,9 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPL
                     EvaluationCase(question=case.question, expected_page_numbers=case.expected_page_numbers)
                     for case in cases
                 ],
-                lambda question, limit: retrieve_page_numbers_for_evaluation(session, paper_id, question, limit),
+                lambda question, limit: retrieve_page_numbers_for_evaluation(
+                    session, paper_id, question, limit, app.state.embedder
+                ),
                 k,
             )
             return RetrievalEvaluationRead(
@@ -232,6 +245,8 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPL
             raise not_found(error) from error
         except RetrievalNotReadyError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except EmbeddingResponseError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
         except (NoRelevantEvidenceError, ValueError) as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
 
@@ -250,6 +265,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPL
                 question,
                 OpenAICompatibleClient.from_environment(),
                 limit=limit,
+                embedder=app.state.embedder,
             )
             return GroundedAnswerRead(
                 answer=answer.answer,
@@ -274,7 +290,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPL
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
         except LLMConfigurationError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
-        except LLMResponseError as error:
+        except (LLMResponseError, EmbeddingResponseError) as error:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
 
     @app.post("/papers/{paper_id}/insights:generate", response_model=PaperInsightRead, status_code=status.HTTP_201_CREATED)
@@ -306,9 +322,11 @@ def validate_pagination(offset: int, limit: int) -> None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="limit must be between 1 and 100")
 
 
-def retrieve_page_numbers_for_evaluation(session: Session, paper_id: int, question: str, limit: int) -> list[int]:
+def retrieve_page_numbers_for_evaluation(
+    session: Session, paper_id: int, question: str, limit: int, embedder: TextEmbedder
+) -> list[int]:
     try:
-        return [chunk.page_number for chunk, _ in retrieve_chunks(session, paper_id, question, limit=limit)]
+        return [chunk.page_number for chunk, _ in retrieve_chunks(session, paper_id, question, limit=limit, embedder=embedder)]
     except NoRelevantEvidenceError:
         return []
 

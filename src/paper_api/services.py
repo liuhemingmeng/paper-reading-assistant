@@ -183,7 +183,8 @@ def retrieve_chunks(
         raise ValueError("query must not be blank")
     document = get_document(session, paper_id)
     embedder = embedder or LocalHashingEmbedder()
-    query_vector = embedder.embed(query).vector
+    query_embedded = embedder.embed(query)
+    query_vector = query_embedded.vector
     statement = (
         select(PaperChunk, ChunkEmbedding)
         .join(ChunkEmbedding, ChunkEmbedding.chunk_id == PaperChunk.id)
@@ -192,6 +193,14 @@ def retrieve_chunks(
     records = list(session.execute(statement))
     if not records:
         raise RetrievalNotReadyError(f"Paper {paper_id} has not been indexed")
+
+    stored_models = {embedding.model for _, embedding in records}
+    if query_embedded.model not in stored_models:
+        raise RetrievalNotReadyError(
+            f"Paper {paper_id} index was built with {sorted(stored_models)} "
+            f"but the query uses {query_embedded.model}; rebuild the index"
+        )
+
 
     scored = [
         (chunk, cosine_similarity(query_vector, json.loads(embedding.vector_json)))

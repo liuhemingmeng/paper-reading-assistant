@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Paper Reading Assistant 第 6 周可替换真实 Embedding 教程">
+  <title>第 6 周教程 | 可替换真实 Embedding</title>
+  <style>
+    :root { --bg:#f7f8fa; --surface:#fff; --soft:#edf4f7; --ink:#172033; --muted:#586575; --line:#d5e0e7; --navy:#15385e; --blue:#126ca6; --teal:#08796e; --orange:#a95700; --red:#b42318; --code:#15233d; --code-ink:#edf5ff; --shadow:0 8px 22px rgba(23,32,51,.08); }
+    * { box-sizing:border-box; } html { scroll-behavior:smooth; } body { margin:0; color:var(--ink); background:var(--bg); font-family:"Microsoft YaHei","Noto Sans SC",system-ui,sans-serif; line-height:1.72; } .hero { padding:56px max(24px,calc((100% - 1160px)/2)); color:#fff; background:var(--navy); border-bottom:5px solid #e88724; } .eyebrow { margin:0 0 10px; color:#b9dff8; font-size:.86rem; font-weight:800; letter-spacing:.06em; } h1 { max-width:920px; margin:0; font-size:clamp(2rem,4vw,3.45rem); line-height:1.2; } .hero p:last-child { max-width:850px; margin:18px 0 0; color:#dceeff; font-size:1.05rem; }
+    .layout { display:grid; grid-template-columns:248px minmax(0,840px); gap:42px; max-width:1160px; margin:0 auto; padding:36px 24px 76px; } .toc { position:sticky; top:18px; align-self:start; padding:18px; border:1px solid var(--line); background:var(--surface); } .toc strong { display:block; margin-bottom:8px; } .toc a { display:block; padding:5px 0; color:var(--muted); font-size:.92rem; text-decoration:none; } .toc a:hover { color:var(--blue); } section { margin-bottom:52px; scroll-margin-top:18px; } h2 { margin:0 0 16px; padding-bottom:9px; border-bottom:2px solid var(--line); font-size:1.55rem; } h3 { margin:30px 0 10px; font-size:1.14rem; } p,li { color:#26344a; } .card { margin:18px 0; padding:20px; border:1px solid var(--line); border-radius:8px; background:var(--surface); box-shadow:var(--shadow); } .callout { border-left:5px solid var(--blue); background:#eef7ff; } .warning { border-left-color:var(--orange); background:#fff7ed; } .danger { border-left-color:var(--red); background:#fff1f2; } .success { border-left-color:var(--teal); background:#ecfdf5; } .label { display:inline-block; margin-bottom:8px; color:var(--blue); font-size:.78rem; font-weight:800; letter-spacing:.06em; } pre { overflow-x:auto; margin:14px 0; padding:16px; border-radius:6px; color:var(--code-ink); background:var(--code); line-height:1.55; } code,pre { font-family:"Cascadia Code",Consolas,monospace; } :not(pre)>code { padding:2px 5px; border-radius:4px; color:#9a3b00; background:#fff0e5; font-size:.91em; } table { width:100%; margin:16px 0; border-collapse:collapse; background:var(--surface); } th,td { padding:11px 12px; border:1px solid var(--line); text-align:left; vertical-align:top; } th { background:var(--soft); } .flow { display:grid; gap:10px; margin:18px 0; } .flow div { padding:13px 15px; border-left:4px solid var(--teal); background:var(--surface); box-shadow:var(--shadow); } .flow b { color:var(--teal); } .check { list-style:none; padding:0; } .check li { margin:8px 0; padding-left:26px; position:relative; } .check li:before { content:"✓"; position:absolute; left:0; color:var(--teal); font-weight:900; }
+  </style>
+</head>
+<body>
+  <header class="hero"><p class="eyebrow">PAPER READING ASSISTANT · WEEK 06</p><h1>把“本地基线”换成“真实 Embedding”而不改业务</h1><p>第 6 周在既有 <code>TextEmbedder</code> 协议下新增一个 OpenAI 兼容 embedding 客户端。配置环境变量即可切换索引模型，再用第 5 周固定评测集对比 Recall@K 与 MRR。业务层、评测代码一行都不用重抄。</p></header>
+  <div class="layout"><nav class="toc" aria-label="目录"><strong>本章目录</strong><a href="#why">1. 为什么要可替换 embedding</a><a href="#protocol">2. TextEmbedder 协议</a><a href="#client">3. 真实客户端实现</a><a href="#select">4. 配置驱动的选择</a><a href="#consistency">5. 索引与查询同源</a><a href="#api">6. API 与错误边界</a><a href="#compare">7. 与基线对比评测</a><a href="#test">8. 测试策略</a><a href="#run">9. 本地运行</a><a href="#pitfalls">10. 常见误区</a><a href="#practice">11. 练习</a><a href="#next">12. 第 7 周衔接</a></nav><main>
+    <section id="why"><h2>1. 为什么要可替换 embedding</h2><p>第 4 周为了“不依赖大模型就能跑通 RAG”，用了一个本地 hashing 向量作为基线：把文本切成 token，用 token 哈希把词面散列到固定维度向量，再归一化做余弦相似度。它零依赖、可复现，但本质是词面匹配——换种说法、同义词、跨语言就找不到。</p><p>真实 embedding 模型把语义编码进向量，能跨越这些表述差异。但“真实”也意味着：需要网络、需要密钥、需要成本、需要选模型。把两者都做成同一协议的不同实现，就能在“可离线、可测试”和“更接近生产”之间切换，而不重写检索链路。</p><div class="card callout"><span class="label">本周已完成</span><p>新增 <code>OpenAICompatibleEmbedder</code>、<code>get_default_embedder()</code> 选择逻辑、<code>create_app(embedder=...)</code> 注入点，以及“索引/查询混合模型”的 409 防护。全量测试 <code>36 passed</code>。</p></div></section>
+    <section id="protocol"><h2>2. TextEmbedder 协议：唯一的契约</h2><p>业务层只认这一个方法。只要对象有 <code>embed(text) -> EmbeddedText</code>，它就是可用的嵌入器：</p><pre>class TextEmbedder(Protocol):
+    def embed(self, text: str) -> EmbeddedText:
+        """Turn text into a vector suitable for cosine similarity search."""
+
+@dataclass(frozen=True)
+class EmbeddedText:
+    vector: list[float]
+    model: str</pre><p>注意 <code>EmbeddedText</code> 不只返回向量，还返回 <code>model</code> 名字。这个名字会写进 <code>ChunkEmbedding.model</code>，它是后面“同源校验”的关键。真实客户端把模型名设成你配置的 <code>EMBEDDING_MODEL</code>；本地基线固定为 <code>local-hashing-v1</code>。</p></section>
+    <section id="client"><h2>3. 真实客户端：复用 OpenAI /embeddings 契约</h2><p>OpenAI 兼容 embedding 接口是 <code>POST {base_url}/embeddings</code>，请求体 <code>{"model": ..., "input": [text]}</code>，返回 <code>{"data": [{"embedding": [...]}]}</code>。我们的客户端与第 3 周 LLM 客户端保持同样的边界纪律：</p><div class="flow"><div><b>配置来源：</b><code>from_environment()</code> 读 <code>EMBEDDING_*</code> 三件套，缺任一即抛 <code>EmbeddingConfigurationError</code>。</div><div><b>重试：</b>429/5xx/超时/网络错误最多 3 次指数退避。</div><div><b>归一化：</b>返回向量立即 <code>normalize()</code>，使余弦相似度等于点积，和本地基线一致。</div><div><b>校验：</b>响应不是对象、data 为空、embedding 不是数字列表，都抛 <code>EmbeddingResponseError</code>。</div></div><pre>def embed(self, text: str) -> EmbeddedText:
+    payload = {"model": self.model, "input": [text]}
+    headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+    for attempt in range(3):
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.post(f"{self.base_url}/embeddings", json=payload, headers=headers)
+            if response.status_code == 429 or response.status_code >= 500:
+                raise httpx.HTTPStatusError(...)
+            response.raise_for_status()
+            return self._parse_response(response.json())
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as error:
+            last_error = error
+            if attempt == 2:
+                break
+            time.sleep(0.5 * (2**attempt))</pre><div class="card warning"><span class="label">为什么归一化很重要</span><p>本地基线存的是单位向量，真实模型未必返回单位向量。若不归一化，余弦相似度就不能简化为点积，且不同模型维度不同会导致比较尺度混乱。在边界层统一归一化，业务层就只用关心“分数越高越相关”。</p></div></section>
+    <section id="select"><h2>4. 配置驱动的选择：一套代码，两种运行</h2><p><code>get_default_embedder()</code> 在应用启动时决定用哪个嵌入器：</p><pre>def get_default_embedder() -> TextEmbedder:
+    load_local_env()
+    base_url = os.getenv("EMBEDDING_BASE_URL", "").strip()
+    api_key = os.getenv("EMBEDDING_API_KEY", "").strip()
+    model = os.getenv("EMBEDDING_MODEL", "").strip()
+    if all((base_url, api_key, model)):
+        return OpenAICompatibleEmbedder(base_url=base_url, api_key=api_key, model=model)
+    return LocalHashingEmbedder()</pre><p>测试也可以显式注入：<code>create_app(embedder=MyFakeEmbedder())</code>。这使得“换嵌入器”成为启动参数，而非散落在各路由的 if/else。</p><table><thead><tr><th>环境变量</th><th>作用</th><th>缺省</th></tr></thead><tbody><tr><td><code>EMBEDDING_BASE_URL</code></td><td>兼容 OpenAI 的 embeddings 端点前缀</td><td rowspan="3">三者缺任一 → 本地 hashing 基线</td></tr><tr><td><code>EMBEDDING_API_KEY</code></td><td>Bearer Token</td></tr><tr><td><code>EMBEDDING_MODEL</code></td><td>模型名，同时作为向量来源标识</td></tr></tbody></table></section>
+    <section id="consistency"><h2>5. 索引与查询必须同源</h2><p>余弦相似度要求两个向量来自同一个映射。若索引用“真实模型 1536 维”，查询用“本地基线 256 维”，维度都不一致，算出来的分数毫无意义。</p><p>因此 <code>create_app</code> 启动时只确定一次 <code>app.state.embedder</code>，索引路由和检索路由都用它。更进一步，<code>retrieve_chunks</code> 在查询时校验：</p><pre>stored_models = {embedding.model for _, embedding in records}
+if query_embedded.model not in stored_models:
+    raise RetrievalNotReadyError(
+        f"Paper {paper_id} index was built with {sorted(stored_models)} "
+        f"but the query uses {query_embedded.model}; rebuild the index"
+    )</pre><div class="card success"><span class="label">防御的是哪类事故</span><p>你昨天用本地基线建了索引，今天配了真实 embedding 但忘了重建。查询会立刻收到 409 并要求重建索引，而不是默默返回一个看似合理的错误答案。</p></div></section>
+    <section id="api"><h2>6. API 与错误边界</h2><p>路由契约没有变化，只有内部错误映射增加了 embedding 相关项：</p><table><thead><tr><th>错误条件</th><th>状态码</th><th>来源</th></tr></thead><tbody><tr><td>真实 embedding 超时/网络/429/5xx 用尽</td><td>502</td><td><code>EmbeddingResponseError</code></td></tr><tr><td>查询嵌入器与已建索引模型不一致</td><td>409</td><td><code>RetrievalNotReadyError</code></td></tr><tr><td>未建索引</td><td>409</td><td>原有逻辑</td></tr><tr><td>未配置 embedding 但强行调用外部（不会发生）</td><td>—</td><td>因为 <code>get_default_embedder</code> 已回退基线</td></tr></tbody></table><p>关键区别：LLM 未配置时回答接口返回 503（避免误请求未知服务）；而 embedding 未配置时系统不会报错，只是静默使用本地基线——因为基线本身就是合法的、可运行的嵌入器。</p></section>
+    <section id="compare"><h2>7. 用同一评测集对比两种模型</h2><p>第 5 周的价值在这里显现：固定问题集不随模型变化。流程是：</p><div class="flow"><div><b>1. 基线记录：</b>不配置 embedding，建索引，跑 <code>retrieval:evaluate</code>，记下 Recall@K 与 MRR。</div><div><b>2. 切换模型：</b>填好 <code>.env</code> 的 <code>EMBEDDING_*</code>，重启服务。</div><div><b>3. 重建索引：</b>对同一论文再调一次 <code>retrieval:index</code>（旧向量会被覆盖）。</div><div><b>4. 重跑评测：</b>同一问题集、同一 K，读新指标与每题明细。</div><div><b>5. 归因：</b>找出“基线 miss、真实模型 hit”和“反过来退化”的题，它们是选型的依据。</div></div><pre># 基线
+curl -X POST http://127.0.0.1:8000/papers/1/retrieval:index
+curl -X POST "http://127.0.0.1:8000/papers/1/retrieval:evaluate?k=3" -d @eval-set.json
+
+# 配置真实 embedding 并重启后
+curl -X POST http://127.0.0.1:8000/papers/1/retrieval:index
+curl -X POST "http://127.0.0.1:8000/papers/1/retrieval:evaluate?k=3" -d @eval-set.json</pre><div class="card warning"><span class="label">切换后必须重建索引</span><p>第 6 周不会自动删除旧向量。因为模型变了，旧向量与新查询不可比；务必重新 <code>retrieval:index</code>。若忘记，查询会命中第 5 节说的 409 防护。</p></div></section>
+    <section id="test"><h2>8. 测试策略</h2><ul><li>单元测试：用假 <code>httpx.Client</code> 验证 <code>OpenAICompatibleEmbedder.embed</code> 返回归一化向量（如 <code>[3,4]</code> → <code>[0.6,0.8]</code>）。</li><li>选择逻辑：环境变量缺省时 <code>get_default_embedder()</code> 返回 <code>LocalHashingEmbedder</code>；三者齐全时返回 <code>OpenAICompatibleEmbedder</code>。</li><li>协议可插拔：注入 <code>LabeledFakeEmbedder</code> 证明索引+检索全链路不依赖具体实现。</li><li>混合模型防护：用 v1 建索引、用 v2 查询，断言抛 <code>RetrievalNotReadyError</code>。</li></ul><pre>python -m pytest -q
+# 预期：36 passed</pre></section>
+    <section id="run"><h2>9. 本地运行</h2><pre># 复制并填写配置模板
+cp .env.example .env
+# 仅填 LLM_* 与 EMBEDDING_* 中你拥有的部分
+
+python -m paper_api
+curl -X POST http://127.0.0.1:8000/papers/1/retrieval:index
+curl -X POST "http://127.0.0.1:8000/papers/1/retrieval:evaluate?k=3" \
+  -H "Content-Type: application/json" -d @eval-set.json</pre><p>仓库未内置真实 embedding 凭据，因此“基线 vs 真实模型”的数值对比需要你在本地配置后运行；代码已保证切换路径可测试、可复现。</p></section>
+    <section id="pitfalls"><h2>10. 常见误区</h2><div class="card danger"><span class="label">不要把“换了更强模型”当结论</span><p>只有在同一固定评测集上、且旧索引已重建、K 不变时，指标提升才可归因于模型。否则分数差异可能来自测试标准漂移或索引残留。</p></div><div class="card warning"><span class="label">不要让检索和生成用两套 embedding</span><p>索引嵌入器和查询嵌入器必须是同一个。若将来分别配置，检索分数会失真。当前设计把两者绑定在 <code>app.state.embedder</code>，从结构上避免这个坑。</p></div><div class="card"><span class="label">不要忽略维度与归一化</span><p>真实模型维度可能 768/1024/1536/3072 不等。向量存进 <code>ChunkEmbedding.dimensions</code>，但相似度能否成立仍取决于同源与归一化，这两个才是业务正确性，维度只是结果。</p></div></section>
+    <section id="practice"><h2>11. 建议独立练习</h2><ul class="check"><li>不配置 embedding，跑第 5 周评测集，记录本地基线在几个同义问法上的 miss 案例。</li><li>配置一个真实 embedding 端点（或本地镜像），重建索引后重跑同一集合，列出“基线 miss、真实 hit”的题。</li><li>阅读 <code>retrieval.py</code> 的 <code>LocalHashingEmbedder</code>，解释为什么它无法处理同义词，并设计一句反问证明你的理解。</li><li>为 <code>get_default_embedder</code> 增加一个“仅部分环境变量已设置”的断言测试，验证它不会半吊子启用真实模型。</li><li>思考若未来要支持“每篇论文用不同 embedding 模型”，数据库和 API 需要改哪里、不必改哪里。</li></ul></section>
+    <section id="next"><h2>12. 第 7 周衔接</h2><p>第 7 周可以从两个方向推进：一是真正跑通“基线 vs 语义向量”的量化对比，并把结果沉淀成一份评测报告；二是把评测从“检索质量”推进到“答案质量”——引入 citation correctness 与 answer faithfulness 的人工标注或裁判模型，回答“系统不仅找到了证据，而且正确使用了证据”。</p></section>
+  </main></div>
+</body>
+</html>

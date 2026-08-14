@@ -41,6 +41,10 @@
   - 以“问题 → 目标证据页码”构造固定、可审计的评测集。
   - 提供逐题命中明细、Recall@K 与 MRR 指标。
   - 可离线回归检索质量，不依赖 LLM 密钥或网络。
+- 可替换的真实 Embedding（第 6 周）：
+  - 在 `TextEmbedder` 协议下新增 OpenAI 兼容 embedding 客户端（`POST /embeddings`）。
+  - `get_default_embedder()` 按 `EMBEDDING_*` 环境变量在真实模型与本地 hashing 基线间切换。
+  - 索引与查询共用同一嵌入器，`retrieve_chunks` 对混合模型返回 409 并要求重建索引。
 
 ## 环境要求
 
@@ -207,6 +211,18 @@ curl -X POST "http://127.0.0.1:8000/papers/1/retrieval:evaluate?k=3" \
 
 `Recall@K` 表示有多少问题在前 K 个结果中找到了至少一个目标页；`MRR` 额外关注第一个目标页的排名。该评测先覆盖检索质量，回答忠实度仍需后续人工标注或裁判模型评测。详细定义见 [第 5 周评测设计](docs/week-05-evaluation-design.md)。
 
+## 可替换 Embedding（第 6 周）
+
+检索索引默认使用本地、无依赖的 hashing 向量。配置以下环境变量后，`create_app` 会改用真实 embedding 模型，索引与查询随之切换：
+
+```bash
+EMBEDDING_BASE_URL=https://your-endpoint/v1
+EMBEDDING_API_KEY=replace-me
+EMBEDDING_MODEL=your-embedding-model
+```
+
+切换真实模型后，需要对该论文重新执行 `POST /papers/{id}/retrieval:index` 重建索引，再用第 5 周同一份问题集运行 `retrieval:evaluate`，即可对比本地基线与新模型的 `Recall@K` / `MRR`。配置、重试、错误边界与第 3 周 LLM 客户端保持一致；未配置时返回 `409`（未索引）而非误调用外部服务。设计细节见 [第 6 周 Embedding 设计](docs/week-06-embedding-design.md)。
+
 ## 基础脚本示例
 
 文件批处理默认只预览，不修改文件：
@@ -259,7 +275,7 @@ python scripts/api_client.py https://httpbin.org/json --output data/api_response
 python -m pytest -q
 ```
 
-当前预期结果：`31 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理、本地向量索引、Top-K 引用检索、RAG 回答边界，以及 Recall@K/MRR 评测指标。
+当前预期结果：`36 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理、本地向量索引、Top-K 引用检索、RAG 回答边界、Recall@K/MRR 评测指标，以及可替换 embedding 客户端与混合模型防护。
 
 ## 教程
 
@@ -270,6 +286,7 @@ python -m pytest -q
 - [第 3 周：PDF 解析与 LLM 阅读洞见教程](docs/tutorials/week-03-pdf-llm.html)
 - [第 4 周：本地 RAG 检索与可引用问答教程](docs/tutorials/week-04-rag-retrieval.html)
 - [第 5 周：RAG 检索与引用评测教程](docs/tutorials/week-05-rag-evaluation.html)
+- [第 6 周：可替换真实 Embedding 教程](docs/tutorials/week-06-embedding.html)
 
 也可以检查所有 Python 文件是否能编译：
 
@@ -295,7 +312,8 @@ python -m compileall -q scripts src tests
 │   ├── tutorials/
 │   ├── week-03-pdf-llm-design.md
 │   ├── week-04-rag-design.md
-│   └── week-05-evaluation-design.md
+│   ├── week-05-evaluation-design.md
+│   └── week-06-embedding-design.md
 └── data/
 ```
 
@@ -319,7 +337,9 @@ python -m compileall -q scripts src tests
 - 用固定问题和目标证据页码建立可复现的 retrieval evaluation set。
 - 区分“前 K 个结果是否命中”的 Recall@K 与“第一个命中排第几”的 MRR。
 - 用逐题结果审计汇总指标，避免只看一个看似漂亮的平均分。
+- 用 `TextEmbedder` 协议隔离 embedding 实现，让本地基线与真实模型共享同一套检索与评测代码。
+- 让索引与查询共用一个嵌入器，并对混合模型返回明确错误，避免无意义的相似度。
 
 ## 下一步
 
-第 6 周将引入真实 embedding 的可替换实现，使用同一份固定评测集对比 Recall@K 与 MRR；再扩展 citation correctness 与 answer faithfulness 的人工标注或裁判模型评测。
+第 7 周可接入真实 embedding 后跑一遍第 5 周评测集，量化对比本地基线与语义向量；或扩展 citation correctness 与 answer faithfulness 的人工标注 / 裁判模型评测，把“检索质量”进一步推进到“回答质量”。
