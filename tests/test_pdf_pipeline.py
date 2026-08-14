@@ -6,6 +6,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from paper_api.api import create_app
+from paper_api.answer_evaluation import (
+    AnswerEvaluationCase,
+    FaithfulVerdict,
+    LLMNotConfiguredForJudgingError,
+    OpenAICompatibleFaithfulnessJudge,
+    check_citation_correctness,
+    evaluate_answers,
+    extract_cited_pages,
+)
 from paper_api.evaluation import EvaluationCase, evaluate_retrieval
 from paper_api.embeddings import OpenAICompatibleEmbedder, get_default_embedder
 from paper_api.llm_client import GroundedAnswer, ReadingInsight
@@ -411,3 +420,165 @@ def test_retrieval_guards_against_mixed_embedder_models(tmp_path: Path) -> None:
                 retrieve_chunks(session, paper_id, "evidence", embedder=LabeledFakeEmbedder("fake-v2"))
         finally:
             session.close()
+
+
+def test_extract_cited_pages_handles_english_and_chinese() -> None:
+    assert extract_cited_pages("See page 3 and p.5 for details.") == [3, 5]
+    assert extract_cited_pages("依据第 7 页与第 8 页的结论。") == [7, 8]
+    assert extract_cited_pages("An answer with no page reference.") == []
+    assert extract_cited_pages("page 4 page 4 p.4") == [4]
+
+
+def test_check_citation_correctness_flags_unsupported_pages() -> None:
+    consistent = check_citation_correctness("See page 1 and page 2.", {1, 2})
+    assert consistent.consistent is True
+    assert consistent.cited_pages == [1, 2]
+
+    hallucinated = check_citation_correctness("See page 9 for the result.", {1, 2})
+    assert hallucinated.consistent is False
+    assert hallucinated.unsupported_pages == [9]
+
+
+class EchoPageAnswerGenerator:
+    """Offline generator that cites the evidence pages it received."""
+
+    def answer(self, question: str, evidence: str) -> GroundedAnswer:
+        pages: list[int] = []
+        for part in evidence.split("[chunk:"):
+            if "page:" in part:
+                try:
+                    pages.append(int(part.split("page:")[1].split(";")[0]))
+                except ValueError:
+                    pass
+        cited = " ".join(f"See page {page}." for page in sorted(set(pages)))
+        return GroundedAnswer(answer=f"Answer. {cited}".strip(), model="fake-answer")
+
+
+class AlwaysFaithfulJudge:
+    def judge(self, question: str, evidence: str, answer: str) -> FaithfulVerdict:
+        return FaithfulVerdict(faithful=True, reason="fake judge")
+
+
+def test_evaluate_answers_runs_offline_with_fake_generator(client: TestClient) -> None:
+    paper_id = create_paper(client)
+    assert upload_pdf(
+        client,
+        paper_id,
+        pdf_bytes(
+            "1 Retrieval\nRetrieval finds relevant evidence before generation.",
+            "2 Evaluation\nEvaluation measures whether cited evidence supports an answer.",
+        ),
+    ).status_code == 201
+    assert client.post(f"/papers/{paper_id}/retrieval:index").status_code == 200
+
+    session = client.app.state.session_factory()
+    try:
+        report = evaluate_answers(
+            session,
+            paper_id,
+            [
+                AnswerEvaluationCase(
+                    question="What finds relevant evidence?",
+                    expected_page_numbers=[1],
+                    expected_answer_pages=[1],
+                ),
+                AnswerEvaluationCase(
+                    question="What measures citation support?",
+                    expected_page_numbers=[2],
+                    expected_answer_pages=[2],
+                ),
+            ],
+            EchoPageAnswerGenerator(),
+            judge=None,
+            k=1,
+            embedder=client.app.state.embedder,
+        )
+    finally:
+        session.close()
+
+    assert report.case_count == 2
+    assert report.recall_at_k == 1.0
+    assert report.citation_correct_rate == 1.0
+    assert report.faithfulness_run is False
+    assert report.faithful_rate is None
+    assert all(result.citation_consistent for result in report.results)
+    assert report.results[0].cited_pages == [1]
+
+
+def test_evaluate_answers_with_fake_judge_sets_faithful_rate(client: TestClient) -> None:
+    paper_id = create_paper(client)
+    assert upload_pdf(
+        client,
+        paper_id,
+        pdf_bytes(
+            "1 Retrieval\nRetrieval finds relevant evidence before generation.",
+            "2 Evaluation\nEvaluation measures citation support.",
+        ),
+    ).status_code == 201
+    assert client.post(f"/papers/{paper_id}/retrieval:index").status_code == 200
+
+    session = client.app.state.session_factory()
+    try:
+        report = evaluate_answers(
+            session,
+            paper_id,
+            [AnswerEvaluationCase(question="What finds evidence?", expected_page_numbers=[1])],
+            EchoPageAnswerGenerator(),
+            judge=AlwaysFaithfulJudge(),
+            k=1,
+            embedder=client.app.state.embedder,
+        )
+    finally:
+        session.close()
+
+    assert report.faithfulness_run is True
+    assert report.faithful_rate == 1.0
+    assert report.results[0].faithful is True
+
+
+def test_answers_evaluate_route_requires_llm_configuration(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    paper_id = create_paper(client)
+    assert upload_pdf(client, paper_id, pdf_bytes("The method retrieves evidence.")).status_code == 201
+    assert client.post(f"/papers/{paper_id}/retrieval:index").status_code == 200
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+
+    response = client.post(
+        f"/papers/{paper_id}/answers:evaluate",
+        json=[{"question": "What retrieves evidence?", "expected_page_numbers": [1]}],
+    )
+    assert response.status_code == 503
+
+
+def test_answers_evaluate_route_rejects_unindexed_and_invalid_cases(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paper_id = create_paper(client)
+    assert upload_pdf(client, paper_id, pdf_bytes("Known evidence here.")).status_code == 201
+
+    monkeypatch.setattr(
+        "paper_api.llm_client.OpenAICompatibleClient.from_environment",
+        lambda: EchoPageAnswerGenerator(),
+    )
+
+    unindexed = client.post(
+        f"/papers/{paper_id}/answers:evaluate",
+        json=[{"question": "What appears?", "expected_page_numbers": [1]}],
+    )
+    assert unindexed.status_code == 409
+
+    invalid = client.post(
+        f"/papers/{paper_id}/answers:evaluate",
+        json=[{"question": "", "expected_page_numbers": [0]}],
+    )
+    assert invalid.status_code == 422
+
+
+def test_faithfulness_judge_from_environment_requires_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+
+    with pytest.raises(LLMNotConfiguredForJudgingError):
+        OpenAICompatibleFaithfulnessJudge.from_environment()

@@ -128,6 +128,49 @@ class RetrievalEvaluationRead(BaseModel):
     results: list[EvaluationCaseResultRead]
 
 
+class AnswerEvaluationCaseRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1_000)
+    expected_page_numbers: list[int] = Field(min_length=1, max_length=10)
+    expected_answer_pages: list[int] = Field(default_factory=list, max_length=10)
+
+    @field_validator("question")
+    @classmethod
+    def strip_question(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("expected_page_numbers", "expected_answer_pages")
+    @classmethod
+    def validate_page_numbers(cls, value: list[int]) -> list[int]:
+        if any(page < 1 for page in value):
+            raise ValueError("page numbers must be positive")
+        return value
+
+
+class AnswerEvaluationCaseResultRead(BaseModel):
+    question: str
+    expected_page_numbers: list[int]
+    answer: str
+    cited_pages: list[int]
+    evidence_pages: list[int]
+    citation_consistent: bool
+    faithful: bool | None
+    faithfulness_reason: str | None
+
+
+class AnswerEvaluationReportRead(BaseModel):
+    k: int
+    case_count: int
+    recall_at_k: float
+    mean_reciprocal_rank: float
+    citation_correct_rate: float
+    faithfulness_run: bool
+    faithful_rate: float | None
+    results: list[AnswerEvaluationCaseResultRead]
+
+
 class RetrievalResultRead(BaseModel):
     chunk_id: int
     sequence: int

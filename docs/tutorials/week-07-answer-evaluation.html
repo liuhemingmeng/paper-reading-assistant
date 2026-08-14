@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Paper Reading Assistant 第 7 周答案质量评测教程">
+  <title>第 7 周教程 | 答案质量评测</title>
+  <style>
+    :root { --bg:#f7f8fa; --surface:#fff; --soft:#edf4f7; --ink:#172033; --muted:#586575; --line:#d5e0e7; --navy:#15385e; --blue:#126ca6; --teal:#08796e; --orange:#a95700; --red:#b42318; --code:#15233d; --code-ink:#edf5ff; --shadow:0 8px 22px rgba(23,32,51,.08); }
+    * { box-sizing:border-box; } html { scroll-behavior:smooth; } body { margin:0; color:var(--ink); background:var(--bg); font-family:"Microsoft YaHei","Noto Sans SC",system-ui,sans-serif; line-height:1.72; } .hero { padding:56px max(24px,calc((100% - 1160px)/2)); color:#fff; background:var(--navy); border-bottom:5px solid #e88724; } .eyebrow { margin:0 0 10px; color:#b9dff8; font-size:.86rem; font-weight:800; letter-spacing:.06em; } h1 { max-width:920px; margin:0; font-size:clamp(2rem,4vw,3.45rem); line-height:1.2; } .hero p:last-child { max-width:850px; margin:18px 0 0; color:#dceeff; font-size:1.05rem; }
+    .layout { display:grid; grid-template-columns:248px minmax(0,840px); gap:42px; max-width:1160px; margin:0 auto; padding:36px 24px 76px; } .toc { position:sticky; top:18px; align-self:start; padding:18px; border:1px solid var(--line); background:var(--surface); } .toc strong { display:block; margin-bottom:8px; } .toc a { display:block; padding:5px 0; color:var(--muted); font-size:.92rem; text-decoration:none; } .toc a:hover { color:var(--blue); } section { margin-bottom:52px; scroll-margin-top:18px; } h2 { margin:0 0 16px; padding-bottom:9px; border-bottom:2px solid var(--line); font-size:1.55rem; } h3 { margin:30px 0 10px; font-size:1.14rem; } p,li { color:#26344a; } .card { margin:18px 0; padding:20px; border:1px solid var(--line); border-radius:8px; background:var(--surface); box-shadow:var(--shadow); } .callout { border-left:5px solid var(--blue); background:#eef7ff; } .warning { border-left-color:var(--orange); background:#fff7ed; } .danger { border-left-color:var(--red); background:#fff1f2; } .success { border-left-color:var(--teal); background:#ecfdf5; } .label { display:inline-block; margin-bottom:8px; color:var(--blue); font-size:.78rem; font-weight:800; letter-spacing:.06em; } pre { overflow-x:auto; margin:14px 0; padding:16px; border-radius:6px; color:var(--code-ink); background:var(--code); line-height:1.55; } code,pre { font-family:"Cascadia Code",Consolas,monospace; } :not(pre)>code { padding:2px 5px; border-radius:4px; color:#9a3b00; background:#fff0e5; font-size:.91em; } table { width:100%; margin:16px 0; border-collapse:collapse; background:var(--surface); } th,td { padding:11px 12px; border:1px solid var(--line); text-align:left; vertical-align:top; } th { background:var(--soft); } .flow { display:grid; gap:10px; margin:18px 0; } .flow div { padding:13px 15px; border-left:4px solid var(--teal); background:var(--surface); box-shadow:var(--shadow); } .flow b { color:var(--teal); } .check { list-style:none; padding:0; } .check li { margin:8px 0; padding-left:26px; position:relative; } .check li:before { content:"✓"; position:absolute; left:0; color:var(--teal); font-weight:800; }
+  </style>
+</head>
+<body>
+  <header class="hero"><p class="eyebrow">PAPER READING ASSISTANT · WEEK 07</p><h1>检索命中 ≠ 答案正确：评测 RAG 的“回答质量”</h1><p>第 5 周评了“检索是否找到目标页”，第 6 周让 embedding 可替换。但 RAG 最终交付的是答案。第 7 周补上生成质量两层：引用正确性（离线，检查答案是否编造证据外的页码）与忠实度（可选 LLM 裁判，检查答案是否仅基于检索证据），并合成端到端评测报告。</p></header>
+  <div class="layout"><nav class="toc" aria-label="目录"><strong>本章目录</strong><a href="#why">1. 为什么还要评答案质量</a><a href="#pipe">2. 端到端评测流水线</a><a href="#cite">3. Citation Correctness（离线）</a><a href="#faith">4. Faithfulness（LLM 裁判）</a><a href="#report">5. 端到端报告</a><a href="#api">6. API 与错误边界</a><a href="#cli">7. 命令行评测</a><a href="#test">8. 测试策略</a><a href="#pitfalls">9. 常见误区</a><a href="#practice">10. 练习</a><a href="#next">11. 第 8 周衔接</a></nav><main>
+    <section id="why"><h2>1. 为什么还要评答案质量</h2><p>第 5 周的 Recall@K / MRR 回答的是“证据找得对不对”。但即使证据找对了，生成阶段仍可能出错：</p><div class="flow"><div><b>编造来源：</b>答案写“见第 5 页”，但检索只返回了第 1、2 页——这是可追溯性的硬伤。</div><div><b>幻觉事实：</b>答案包含证据里根本没有的信息，却看起来合理。</div><div><b>未归因：</b>答案正确但没指出依据页，读者无法复核。</div></div><p>RAG 的“可信” = 检索质量 × 生成质量。只评一边都会高估系统。第 7 周把两维合并到同一份固定评测集上，让“找得对”和“用得对”一起被回归。</p><div class="card callout"><span class="label">本周已完成</span><p>新增 <code>answer_evaluation.py</code>（引用抽取、引用校验、忠实度裁判、端到端报告）、问答评测路由、CLI 脚本，以及 43 个通过的测试。</p></div></section>
+
+    <section id="pipe"><h2>2. 端到端评测流水线</h2><p>每条评测用例执行同一条真实请求链路，只是最后多两步评分：</p><div class="flow"><div><b>检索：</b>对问题做 Top-K 检索，得到证据块与页码（复用第 5 周 Recall@K/MRR）。</div><div><b>生成：</b>用 <code>answer_question</code> 只把证据喂给生成器，得到答案与 citations（第 4 周契约）。</div><div><b>引用校验：</b>从答案文本抽页码，比对证据页码集合。</div><div><b>忠实裁判（可选）：</b>把 (问题, 证据, 答案) 交给 LLM 裁判，返回 faithful + 理由。</div><div><b>汇总：</b>检索指标 + 引用正确率 + 忠实率，逐题明细 + 聚合。</div></div><p>全程不重写检索或问答逻辑，只在它们外围加“评分”层。这正是可维护评测系统的形状：被测对象是既有功能，评测是独立的、可替换的。</p></section>
+
+    <section id="cite"><h2>3. Citation Correctness：零成本的硬检查</h2><p>很多 RAG 答案会在正文里写“见第 N 页”。如果 N 不在检索证据里，就是凭空引用。我们用正则从答案文本抽显式页码，支持英文与中文：</p><pre>_CITED_PAGE_PATTERNS = [
+    re.compile(r"page\s+(\d+)", re.IGNORECASE),
+    re.compile(r"p\.?\s*(\d+)", re.IGNORECASE),
+    re.compile(r"第\s*(\d+)\s*页"),
+]
+
+def check_citation_correctness(answer, evidence_pages):
+    cited = extract_cited_pages(answer)
+    unsupported = [p for p in cited if p not in evidence_pages]
+    return CitationCheck(
+        cited_pages=cited,
+        evidence_pages=sorted(evidence_pages),
+        unsupported_pages=unsupported,
+        consistent=len(unsupported) == 0,
+    )</pre><div class="card success"><span class="label">为什么这是“硬检查”</span><p>它不需要任何模型、任何网络、任何密钥。只要答案敢写页码，我们就验证那个页码确实在系统给模型的证据里。遗漏（答案没写页码）不算违规，但会在报告里以 <code>cited_pages == []</code> 暴露，提示“答案未显式归因”。</p></div><p>注意 <code>extract_cited_pages</code> 对相同页码去重——引用校验关心“引用了哪些页”，而不是“引用了几次”。</p></section>
+
+    <section id="faith"><h2>4. Faithfulness：LLM 作为裁判</h2><p>引用正确只证明“页码没编造”，不证明“事实没编造”。忠实度要求裁判判断：答案的每一个事实声称是否都能在证据中找到依据。</p><p>我们定义 <code>FaithfulnessJudge</code> 协议，并给出 <code>OpenAICompatibleFaithfulnessJudge</code>，沿用第 3 周 LLM 客户端的边界纪律：</p><div class="flow"><div><b>配置：</b><code>from_environment()</code> 读 <code>LLM_*</code> 三件套，缺任一抛 <code>LLMNotConfiguredForJudgingError</code>。</div><div><b>请求：</b>要求模型返回 JSON <code>{faithful: bool, reason: str}</code>，temperature=0。</div><div><b>重试：</b>429/5xx/超时/网络错误最多 3 次退避。</div><div><b>解析：</b>缺 <code>faithful</code> 字段或无法解析 → 抛 <code>FaithfulnessError</code>。</div></div><pre>class FaithfulnessJudge(Protocol):
+    def judge(self, question, evidence, answer) -> FaithfulVerdict: ...
+
+@dataclass(frozen=True)
+class FaithfulVerdict:
+    faithful: bool
+    reason: str</pre><div class="card warning"><span class="label">裁判也有局限</span><p>LLM 裁判会误判，且本身消耗 token。它给出的是“可回归的软信号”，不是金标准。报告里 <code>faithful_rate</code> 与 <code>faithfulness_reason</code> 都应被人工抽查，而不是当最终真理。</p></div></section>
+
+    <section id="report"><h2>5. 端到端报告：一次跑出两维指标</h2><p><code>evaluate_answers</code> 把检索评测和答案评测合在一起，输出一个报告：</p><table><thead><tr><th>字段</th><th>含义</th></tr></thead><tbody><tr><td><code>recall_at_k</code> / <code>mean_reciprocal_rank</code></td><td>检索质量（第 5 周）</td></tr><tr><td><code>citation_correct_rate</code></td><td>所有用例中“未编造页码”的比例</td></tr><tr><td><code>faithfulness_run</code></td><td>本次是否跑了忠实度裁判</td></tr><tr><td><code>faithful_rate</code></td><td>忠实比例；未跑裁判时为 <code>null</code></td></tr><tr><td><code>results[]</code></td><td>逐题：答案、引用页、证据页、引用一致、忠实、理由</td></tr></tbody></table><p>关键设计：<code>judge=None</code> 时报告仍然完整——检索指标和引用正确率照常输出，只是 <code>faithful_rate</code> 为 <code>null</code>。这保证“没配 LLM 也能回归大部分质量”，而不是整条评测瘫痪。</p></section>
+
+    <section id="api"><h2>6. API 与错误边界</h2><p>新增路由复用第 4/5 周的错误处理风格：</p><pre>POST /papers/{paper_id}/answers:evaluate
+  body: [{ "question": "...", "expected_page_numbers": [1], "expected_answer_pages": [1] }]
+  query: k=3, run_faithfulness=false</pre><table><thead><tr><th>条件</th><th>状态码</th><th>来源</th></tr></thead><tbody><tr><td>未配置 LLM（生成答案）</td><td>503</td><td><code>LLMConfigurationError</code></td></tr><tr><td><code>run_faithfulness=true</code> 但未配置裁判</td><td>503</td><td><code>LLMNotConfiguredForJudgingError</code></td></tr><tr><td>未建索引</td><td>409</td><td><code>RetrievalNotReadyError</code></td></tr><tr><td>空问题 / 无关证据</td><td>422</td><td>校验或 <code>NoRelevantEvidenceError</code></td></tr><tr><td>embedding / LLM 调用失败</td><td>502</td><td>对应 ResponseError</td></tr></tbody></table><p>和第 3、6 周一致：未配置外部服务时返回 503，绝不把请求发到未知地址。</p></section>
+
+    <section id="cli"><h2>7. 命令行评测</h2><p><code>scripts/evaluate_answers.py</code> 让你对本地数据库跑完整评测，无需起服务：</p><pre># 离线演示：用假生成器，引用正确性链路可全程跑通（无需任何 LLM 凭据）
+python scripts/evaluate_answers.py --paper-id 1 --cases cases.json --fake
+
+# 真实运行（需要 .env 配置 LLM_*）
+python scripts/evaluate_answers.py --paper-id 1 --cases cases.json --faithfulness</pre><p><code>cases.json</code> 是评测用例数组：</p><pre>[
+  {"question": "方法检索了什么证据？", "expected_page_numbers": [1], "expected_answer_pages": [1]},
+  {"question": "实验报告了什么结果？", "expected_page_numbers": [2]}
+]</pre><div class="card callout"><span class="label">为什么提供 --fake</span><p>你本地没有 LLM 凭据时，<code>--fake</code> 让生成器把证据页作为引用写进答案，从而真实演示“引用正确性检查”如何跑通与如何拦截编造页。这是把“评测系统”本身做成可运行、可演示的工件，而不只是测试里的内部函数。</p></div></section>
+
+    <section id="test"><h2>8. 测试策略</h2><ul><li>页码抽取：中英文多种写法与去重。</li><li>引用校验：用含“page 9”但证据只有 1、2 的答案，断言 <code>consistent=False</code> 且 <code>unsupported_pages=[9]</code>。</li><li>端到端（无 LLM）：用 Fake 生成器跑通检索+引用指标，断言 <code>citation_correct_rate=1.0</code>、<code>faithful_rate=null</code>。</li><li>端到端（带裁判）：注入 Fake 裁判，断言 <code>faithful_rate=1.0</code>。</li><li>路由边界：未配置 LLM → 503；未建索引 → 409；非法用例 → 422。</li><li>裁判配置：缺失 <code>LLM_*</code> 时 <code>from_environment()</code> 抛指定异常。</li></ul><pre>python -m pytest -q
+# 预期：43 passed</pre></section>
+
+    <section id="pitfalls"><h2>9. 常见误区</h2><div class="card danger"><span class="label">不要只信忠实度分数</span><p><code>faithful_rate</code> 来自另一个 LLM，它会误判、会奉承、会漏检。把它当可回归信号，配合 <code>faithfulness_reason</code> 人工抽查，而不是当最终结论。</p></div><div class="card warning"><span class="label">引用正确 ≠ 事实正确</span><p>答案写“见第 1 页”且第 1 页确实在证据里，只能证明没编造页码；第 1 页里有没有支持该断言的内容，需要忠实度或人工判断。两维要一起看。</p></div><div class="card"><span class="label">未配置也要能回归</span><p>评测系统最怕“没密钥就全挂”。第 7 周让引用正确性（占用最大头的可检查项）完全离线，只有忠实度是可选外挂，避免把质量回归锁死在外部服务上。</p></div></section>
+
+    <section id="practice"><h2>10. 独立练习</h2><ul class="check"><li>构造一个答案含“page 9”但证据只有 1、2 页的用例，跑 <code>--fake</code> 看报告里 <code>unsupported_pages</code> 是否拦截。</li><li>给 <code>extract_cited_pages</code> 增加“Figure 3 / 图 4”的抽取规则，并补一个测试。</li><li>思考：若答案用“[1][2]”上标引用而非“page N”，引用校验该如何改造？需要模型输出结构化引用吗？</li><li>设计一个“答案应包含 expected_answer_pages 中至少一页”的软信号，并把它加进报告（注意：这是弱建议，不是硬 fail）。</li><li>用第 5 周同一问题集，先跑引用正确性（离线），再设想配置 LLM 后跑忠实度，列出你期望先看到的两类失败案例。</li></ul></section>
+
+    <section id="next"><h2>11. 第 8 周衔接</h2><p>第 8 周可把评测从“离线可跑”推进到“生产可对比”：配置真实 <code>EMBEDDING_*</code> 后重跑第 5 周评测集，量化对比本地基线与语义向量；配置真实 <code>LLM_*</code> 后用 <code>scripts/evaluate_answers.py --faithfulness</code> 跑答案质量报告，并尝试 answer-vs-reference 语义相似度或人工标注基准。当前的离线 Fake 链路保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。</p></section>
+  </main></div>
+</body>
+</html>

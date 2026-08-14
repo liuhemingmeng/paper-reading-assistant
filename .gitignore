@@ -24,6 +24,8 @@ venv/
 data/uploads/
 data/local-acceptance.pdf
 data/week5-acceptance.pdf
+data/week7-acceptance.pdf
+pytest-cache-files-*/
 !data/.gitkeep
 
 # WorkBuddy project metadata

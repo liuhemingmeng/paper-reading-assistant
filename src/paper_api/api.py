@@ -14,12 +14,20 @@ from .database import (
     create_tables,
     get_session,
 )
+from .answer_evaluation import (
+    AnswerEvaluationCase,
+    LLMNotConfiguredForJudgingError,
+    OpenAICompatibleFaithfulnessJudge,
+    evaluate_answers,
+)
 from .embeddings import EmbeddingConfigurationError, EmbeddingResponseError, get_default_embedder
 from .evaluation import EvaluationCase, evaluate_retrieval
 from .llm_client import LLMConfigurationError, LLMResponseError, OpenAICompatibleClient
 from .pdf_processing import PDFProcessingError, UPLOAD_ROOT, chunk_pages, extract_pdf_pages, save_upload
 from .retrieval import TextEmbedder
 from .schemas import (
+    AnswerEvaluationCaseRequest,
+    AnswerEvaluationReportRead,
     EvaluationCaseRequest,
     EvaluationCaseResultRead,
     GroundedAnswerRead,
@@ -249,6 +257,69 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
         except (NoRelevantEvidenceError, ValueError) as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+
+    @app.post("/papers/{paper_id}/answers:evaluate", response_model=AnswerEvaluationReportRead)
+    def evaluate_answers_route(
+        paper_id: int,
+        cases: list[AnswerEvaluationCaseRequest],
+        run_faithfulness: bool = False,
+        k: int = 3,
+        session: Session = Depends(get_db_session),
+    ) -> AnswerEvaluationReportRead:
+        validate_retrieval_limit(k)
+        try:
+            generator = OpenAICompatibleClient.from_environment()
+            judge = OpenAICompatibleFaithfulnessJudge.from_environment() if run_faithfulness else None
+            report = evaluate_answers(
+                session,
+                paper_id,
+                [
+                    AnswerEvaluationCase(
+                        question=case.question,
+                        expected_page_numbers=case.expected_page_numbers,
+                        expected_answer_pages=case.expected_answer_pages,
+                    )
+                    for case in cases
+                ],
+                generator,
+                judge=judge,
+                k=k,
+                embedder=app.state.embedder,
+            )
+            return AnswerEvaluationReportRead(
+                k=report.k,
+                case_count=report.case_count,
+                recall_at_k=round(report.recall_at_k, 6),
+                mean_reciprocal_rank=round(report.mean_reciprocal_rank, 6),
+                citation_correct_rate=round(report.citation_correct_rate, 6),
+                faithfulness_run=report.faithfulness_run,
+                faithful_rate=round(report.faithful_rate, 6) if report.faithful_rate is not None else None,
+                results=[
+                    AnswerEvaluationCaseResultRead(
+                        question=result.question,
+                        expected_page_numbers=result.expected_page_numbers,
+                        answer=result.answer,
+                        cited_pages=result.cited_pages,
+                        evidence_pages=result.evidence_pages,
+                        citation_consistent=result.citation_consistent,
+                        faithful=result.faithful,
+                        faithfulness_reason=result.faithfulness_reason,
+                    )
+                    for result in report.results
+                ],
+            )
+        except (PaperNotFoundError, DocumentNotFoundError) as error:
+            raise not_found(error) from error
+        except RetrievalNotReadyError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except (NoRelevantEvidenceError, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+        except LLMConfigurationError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        except LLMNotConfiguredForJudgingError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        except (LLMResponseError, EmbeddingResponseError) as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
 
     @app.post("/papers/{paper_id}/questions:answer", response_model=GroundedAnswerRead)
     def answer_question_route(
