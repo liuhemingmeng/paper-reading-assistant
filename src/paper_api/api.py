@@ -17,17 +17,24 @@ from .database import (
 from .llm_client import LLMConfigurationError, LLMResponseError, OpenAICompatibleClient
 from .pdf_processing import PDFProcessingError, UPLOAD_ROOT, chunk_pages, extract_pdf_pages, save_upload
 from .schemas import (
+    GroundedAnswerRead,
     PaperChunkRead,
     PaperCreate,
     PaperDocumentRead,
     PaperInsightRead,
     PaperRead,
     PaperUpdate,
+    RetrievalIndexRead,
+    RetrievalResultRead,
 )
 from .services import (
     DocumentNotFoundError,
     InsightNotFoundError,
+    NoRelevantEvidenceError,
     PaperNotFoundError,
+    RetrievalNotReadyError,
+    answer_question,
+    build_retrieval_index,
     create_paper,
     delete_paper,
     generate_insight,
@@ -36,6 +43,7 @@ from .services import (
     get_paper,
     list_chunks,
     list_papers,
+    retrieve_chunks,
     save_processed_document,
     update_paper,
 )
@@ -48,8 +56,8 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPL
 
     app = FastAPI(
         title="Paper Reading Assistant API",
-        version="0.3.0",
-        description="Manage paper metadata, parse PDFs, and generate LLM reading insights.",
+        version="0.4.0",
+        description="Manage papers, parse PDFs, retrieve source-aware evidence, and generate grounded answers.",
     )
     app.state.session_factory = session_factory
 
@@ -148,6 +156,83 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL, upload_root: Path = UPL
         except (PaperNotFoundError, DocumentNotFoundError) as error:
             raise not_found(error) from error
 
+    @app.post("/papers/{paper_id}/retrieval:index", response_model=RetrievalIndexRead)
+    def index_document_route(paper_id: int, session: Session = Depends(get_db_session)) -> RetrievalIndexRead:
+        try:
+            model, indexed_chunks = build_retrieval_index(session, paper_id)
+            return RetrievalIndexRead(paper_id=paper_id, model=model, indexed_chunks=indexed_chunks)
+        except (PaperNotFoundError, DocumentNotFoundError) as error:
+            raise not_found(error) from error
+
+    @app.get("/papers/{paper_id}/search", response_model=list[RetrievalResultRead])
+    def search_paper_route(
+        paper_id: int,
+        query: str,
+        limit: int = 3,
+        session: Session = Depends(get_db_session),
+    ) -> list[RetrievalResultRead]:
+        validate_retrieval_limit(limit)
+        try:
+            return [
+                RetrievalResultRead(
+                    chunk_id=chunk.id,
+                    sequence=chunk.sequence,
+                    page_number=chunk.page_number,
+                    section_title=chunk.section_title,
+                    content=chunk.content,
+                    score=round(score, 6),
+                )
+                for chunk, score in retrieve_chunks(session, paper_id, query, limit=limit)
+            ]
+        except (PaperNotFoundError, DocumentNotFoundError) as error:
+            raise not_found(error) from error
+        except RetrievalNotReadyError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except (NoRelevantEvidenceError, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+
+    @app.post("/papers/{paper_id}/questions:answer", response_model=GroundedAnswerRead)
+    def answer_question_route(
+        paper_id: int,
+        question: str,
+        limit: int = 3,
+        session: Session = Depends(get_db_session),
+    ) -> GroundedAnswerRead:
+        validate_retrieval_limit(limit)
+        try:
+            answer, evidence = answer_question(
+                session,
+                paper_id,
+                question,
+                OpenAICompatibleClient.from_environment(),
+                limit=limit,
+            )
+            return GroundedAnswerRead(
+                answer=answer.answer,
+                model=answer.model,
+                citations=[
+                    RetrievalResultRead(
+                        chunk_id=chunk.id,
+                        sequence=chunk.sequence,
+                        page_number=chunk.page_number,
+                        section_title=chunk.section_title,
+                        content=chunk.content,
+                        score=round(score, 6),
+                    )
+                    for chunk, score in evidence
+                ],
+            )
+        except (PaperNotFoundError, DocumentNotFoundError) as error:
+            raise not_found(error) from error
+        except RetrievalNotReadyError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except (NoRelevantEvidenceError, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+        except LLMConfigurationError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        except LLMResponseError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+
     @app.post("/papers/{paper_id}/insights:generate", response_model=PaperInsightRead, status_code=status.HTTP_201_CREATED)
     def generate_insight_route(paper_id: int, session: Session = Depends(get_db_session)) -> PaperInsightRead:
         try:
@@ -175,6 +260,11 @@ def validate_pagination(offset: int, limit: int) -> None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="offset must be >= 0")
     if not 1 <= limit <= 100:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="limit must be between 1 and 100")
+
+
+def validate_retrieval_limit(limit: int) -> None:
+    if not 1 <= limit <= 10:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="limit must be between 1 and 10")
 
 
 def not_found(error: Exception) -> HTTPException:

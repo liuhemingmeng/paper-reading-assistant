@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Paper Reading Assistant 第 4 周本地 RAG 检索与可引用问答教程">
+  <title>第 4 周教程 | 本地 RAG 检索与可引用问答</title>
+  <style>
+    :root { --bg:#f7f8fa; --surface:#fff; --soft:#edf4f7; --ink:#172033; --muted:#586575; --line:#d5e0e7; --navy:#15385e; --blue:#126ca6; --teal:#08796e; --orange:#a95700; --red:#b42318; --code:#15233d; --code-ink:#edf5ff; --shadow:0 8px 22px rgba(23,32,51,.08); }
+    * { box-sizing:border-box; } html { scroll-behavior:smooth; } body { margin:0; color:var(--ink); background:var(--bg); font-family:"Microsoft YaHei","Noto Sans SC",system-ui,sans-serif; line-height:1.72; } .hero { padding:56px max(24px,calc((100% - 1160px)/2)); color:#fff; background:var(--navy); border-bottom:5px solid #e88724; } .eyebrow { margin:0 0 10px; color:#b9dff8; font-size:.86rem; font-weight:800; letter-spacing:.06em; } h1 { max-width:920px; margin:0; font-size:clamp(2rem,4vw,3.45rem); line-height:1.2; } .hero p:last-child { max-width:850px; margin:18px 0 0; color:#dceeff; font-size:1.05rem; }
+    .layout { display:grid; grid-template-columns:248px minmax(0,840px); gap:42px; max-width:1160px; margin:0 auto; padding:36px 24px 76px; } .toc { position:sticky; top:18px; align-self:start; padding:18px; border:1px solid var(--line); background:var(--surface); } .toc strong { display:block; margin-bottom:8px; } .toc a { display:block; padding:5px 0; color:var(--muted); font-size:.92rem; text-decoration:none; } .toc a:hover { color:var(--blue); } section { margin-bottom:52px; scroll-margin-top:18px; } h2 { margin:0 0 16px; padding-bottom:9px; border-bottom:2px solid var(--line); font-size:1.55rem; } h3 { margin:30px 0 10px; font-size:1.14rem; } p,li { color:#26344a; } .card { margin:18px 0; padding:20px; border:1px solid var(--line); border-radius:8px; background:var(--surface); box-shadow:var(--shadow); } .callout { border-left:5px solid var(--blue); background:#eef7ff; } .warning { border-left-color:var(--orange); background:#fff7ed; } .danger { border-left-color:var(--red); background:#fff1f2; } .success { border-left-color:var(--teal); background:#ecfdf5; } .label { display:inline-block; margin-bottom:8px; color:var(--blue); font-size:.78rem; font-weight:800; letter-spacing:.06em; } pre { overflow-x:auto; margin:14px 0; padding:16px; border-radius:6px; color:var(--code-ink); background:var(--code); line-height:1.55; } code,pre { font-family:"Cascadia Code",Consolas,monospace; } :not(pre)>code { padding:2px 5px; border-radius:4px; color:#9a3b00; background:#fff0e5; font-size:.91em; } table { width:100%; margin:16px 0; border-collapse:collapse; background:var(--surface); } th,td { padding:11px 12px; border:1px solid var(--line); text-align:left; vertical-align:top; } th { background:var(--soft); } .flow { display:grid; gap:10px; margin:18px 0; } .flow div { padding:13px 15px; border-left:4px solid var(--teal); background:var(--surface); box-shadow:var(--shadow); } .flow b { color:var(--teal); } .check { list-style:none; padding:0; } .check li { margin:8px 0; padding:9px 12px; border:1px solid var(--line); background:var(--surface); } .check li::before { content:"□ "; color:var(--teal); font-weight:800; } footer { padding:24px; border-top:1px solid var(--line); color:var(--muted); background:var(--surface); text-align:center; } @media(max-width:820px) { .layout { display:block; padding-top:22px; } .toc { position:static; margin-bottom:28px; } .toc a { display:inline-block; margin-right:14px; } .hero { padding-top:40px; padding-bottom:40px; } }
+  </style>
+</head>
+<body>
+  <header class="hero"><p class="eyebrow">PAPER READING ASSISTANT · WEEK 04</p><h1>让回答带着它的证据回来</h1><p>第 4 周完成 RAG 的最小闭环：把 PDF 文本块转为向量，按问题排序证据，再让模型只根据这些证据回答，并向调用方返回页码与章节引用。</p></header>
+  <div class="layout"><nav class="toc" aria-label="目录"><strong>本章目录</strong><a href="#goal">1. 目标与边界</a><a href="#rag">2. RAG 的四个阶段</a><a href="#embed">3. 为什么使用本地基线</a><a href="#index">4. 索引与数据模型</a><a href="#search">5. Top-K 检索</a><a href="#answer">6. Grounded Answer</a><a href="#api">7. API 契约</a><a href="#test">8. 测试与评测</a><a href="#run">9. 本地运行</a><a href="#pitfalls">10. 常见误区</a><a href="#practice">11. 练习</a><a href="#next">12. 第 5 周衔接</a></nav><main>
+    <section id="goal"><h2>1. 目标与边界</h2><p>“接入大模型问论文”不等于 RAG。真正的 RAG 要把问题转换成检索请求，找出可核验的原文证据，再约束生成阶段使用这些证据。第 3 周保存的 <code>PaperChunk</code> 已有页码、章节和顺序；第 4 周在此基础上补上向量、排序、引用和问答边界。</p><div class="card callout"><span class="label">本周完成</span><p>新增 chunk embedding 持久化、确定性本地嵌入器、余弦相似度 Top-K 检索、索引/搜索/问答 API、证据 citations，以及 28 个回归测试。</p></div><div class="card warning"><span class="label">刻意不做</span><p>本周不把 hashing vector 宣称为语义 embedding，也不引入云向量数据库。先把正确的数据流与可验证契约建立起来，下一阶段再比较真实 embedding 与索引方案。</p></div></section>
+    <section id="rag"><h2>2. RAG 的四个阶段</h2><div class="flow"><div><b>Embedding：</b>把文本转换为固定长度向量，语义相近的文本理想情况下应更接近。</div><div><b>Indexing：</b>为每个 chunk 保存向量、模型版本与维度，形成可查询的知识索引。</div><div><b>Retrieval：</b>把用户问题向量化，与 chunk 向量比较，选出 Top-K evidence。</div><div><b>Generation：</b>只把问题和 evidence 交给 LLM，再把 evidence 作为 citations 返回。</div></div><p>将这四步分开，才能定位失败究竟来自解析、embedding、检索还是模型回答。若答案不好，不能直接归因于“模型不够强”。</p></section>
+    <section id="embed"><h2>3. 为什么使用本地 hashing baseline</h2><p><code>TextEmbedder</code> 是一个协议，业务层只要求它能执行 <code>embed(text)</code>。默认实现 <code>LocalHashingEmbedder</code> 使用稳定 hash 将 token 映射到 256 维向量，再执行 L2 归一化。</p><pre>class TextEmbedder(Protocol):
+    def embed(self, text: str) -> EmbeddedText: ...
+
+class LocalHashingEmbedder:
+    model = "local-hashing-v1"
+    def embed(self, text: str) -> EmbeddedText:
+        # token -> stable dimension -> normalized vector</pre><table><thead><tr><th>优点</th><th>代价</th></tr></thead><tbody><tr><td>没有模型下载、API key 或网络依赖</td><td>主要捕捉词面重合，不能可靠理解同义词</td></tr><tr><td>测试结果稳定，适合学习相似度与排序</td><td>哈希冲突会引入噪声</td></tr><tr><td>通过协议可替换真实 embedding</td><td>SQLite 线性扫描不适合大量文档</td></tr></tbody></table><p>这是一种工程上的“先建立可验证基线”策略。面试中应主动说明它的限制，而不是把它包装成生产级语义搜索。</p></section>
+    <section id="index"><h2>4. 索引与数据模型</h2><pre>PaperChunk 1 ─── 1 ChunkEmbedding
+
+ChunkEmbedding:
+- chunk_id       # 对应证据块
+- model          # local-hashing-v1
+- dimensions     # 256
+- vector_json    # 归一化向量
+- created_at</pre><p>索引写入 SQLite 是为了让“解析完成”和“检索可用”成为两个明确状态。重传 PDF 会级联删除旧 document、chunks 和 embeddings；因此不会让旧版本 PDF 的向量混入新版本的检索结果。</p><pre>POST /papers/{paper_id}/retrieval:index
+
+# 返回
+{"paper_id": 1, "model": "local-hashing-v1", "indexed_chunks": 12}</pre></section>
+    <section id="search"><h2>5. Top-K 检索与余弦相似度</h2><p>本项目把所有向量归一化。归一化后余弦相似度等于向量点积，因此排序代码只需比较对应维度的乘积和：</p><pre>score = sum(left_value * right_value
+            for left_value, right_value in zip(query_vector, chunk_vector))
+ranked = sorted(scored, key=lambda item: (-item.score, item.chunk.sequence))[:limit]</pre><p>用 <code>sequence</code> 作为同分时的第二排序键，保证结果确定。检索 API 返回的不是“神秘上下文”，而是能被用户复核的文本、页码、章节和 score。</p><pre>GET /papers/1/search?query=retrieval%20evidence&amp;limit=3
+
+[
+  {
+    "chunk_id": 7,
+    "page_number": 3,
+    "section_title": "2 Method",
+    "content": "...",
+    "score": 0.612372
+  }
+]</pre></section>
+    <section id="answer"><h2>6. Grounded Answer：模型只能看到证据</h2><p><code>answer_question()</code> 先调用 <code>retrieve_chunks()</code>，再把每块格式化为带来源标签的 evidence。它不会传入整篇 <code>extracted_text</code>。</p><pre>[chunk:7; page:3; section:2 Method]
+The method retrieves evidence before generating an answer.</pre><p>system prompt 明确要求：仅根据 supplied evidence 回答；证据不足时承认不足；不得编造事实。提示词不能数学保证模型不幻觉，因此 API 还必须将同一批 <code>citations</code> 返回给客户端。</p><div class="card success"><span class="label">产品上的关键判断</span><p>一个流畅但没有来源的回答不是可靠 RAG。引用既帮助用户判断，也让开发者能区分“检索找错了”与“模型没有遵守证据”。</p></div></section>
+    <section id="api"><h2>7. API 契约与错误语义</h2><table><thead><tr><th>场景</th><th>响应</th><th>调用方应做什么</th></tr></thead><tbody><tr><td>Paper 或 PDF 不存在</td><td>404</td><td>先创建论文或上传 PDF</td></tr><tr><td>尚未建立索引</td><td>409</td><td>调用 retrieval:index</td></tr><tr><td>空问题、无词面相关证据</td><td>422</td><td>修改问题或提高索引质量</td></tr><tr><td>模型配置缺失</td><td>503</td><td>设置本机 LLM 环境变量</td></tr><tr><td>上游模型失败</td><td>502</td><td>提示稍后重试，记录上游故障</td></tr></tbody></table><p><code>limit</code> 限制为 1 到 10。过大的 Top-K 会增加噪声与模型上下文成本；过小则可能遗漏关键论证。第 4 周从默认 3 开始，并将在第 5 周用评测集讨论它。</p></section>
+    <section id="test"><h2>8. 测试：不是只测“能返回答案”</h2><ul><li>未索引搜索返回 409，证明索引状态是显式契约。</li><li>搜索命中正确页码与章节，验证引用数据没有丢失。</li><li>Fake AnswerGenerator 断言只接收到 Top-1 证据，防止业务层偷偷传整篇文档。</li><li>空和无关 query 返回 422，避免用无意义的结果触发生成。</li><li>问答已建立索引但没有配置 LLM 时返回 503，避免意外外部调用。</li></ul><pre>python -m pytest -q
+# 预期：28 passed</pre><p>FakeGenerator 不是“假的测试”。它用于精确验证业务边界；真实模型调用应在独立的集成验收中执行，并受成本、密钥和网络控制。</p></section>
+    <section id="run"><h2>9. 本地运行与验收</h2><pre>python -m paper_api
+
+# 已上传 PDF 后建立索引
+curl -X POST http://127.0.0.1:8000/papers/1/retrieval:index
+
+# 查证据
+curl "http://127.0.0.1:8000/papers/1/search?query=retrieval%20evidence&amp;limit=3"
+
+# 配置 LLM 后才可问答
+curl -X POST "http://127.0.0.1:8000/papers/1/questions:answer?question=What%20does%20the%20method%20retrieve%3F&amp;limit=3"</pre><p>先人工检查 search 的 chunks 是否确实回答了问题，再检查 answer 的 citations 是否对应这些 chunks。不要只读最终自然语言回答。</p></section>
+    <section id="pitfalls"><h2>10. 常见误区</h2><div class="card danger"><span class="label">“有向量”不等于“有语义理解”</span><p>哈希词向量会受相同 token 驱动。它可以教学与回归测试，但不能用来证明系统在真实论文语义检索上表现良好。</p></div><div class="card warning"><span class="label">不要先生成、后补引用</span><p>正确做法是 citations 与生成时实际提供的 evidence 来自同一个列表。事后另搜一遍再拼引用，可能使引用与模型输入不一致。</p></div><div class="card"><span class="label">不要把 score 当置信度</span><p>余弦相似度只描述当前向量空间的相对接近度，不代表答案正确概率。需要人工标注或固定评测集才能判断检索质量。</p></div></section>
+    <section id="practice"><h2>11. 建议独立练习</h2><ul class="check"><li>实现 <code>OpenAICompatibleEmbeddingClient</code>，遵守同一个 <code>TextEmbedder</code> 协议，并在测试中用 mock 验证模型版本与维度保存。</li><li>给 search 增加最小 score 阈值参数，设计默认值并写出“无结果”测试。</li><li>建立 10 个“问题 → 正确页码”样本，计算 Recall@1 和 Recall@3。</li><li>让 citations 新增原文字符范围，思考页码与 chunk 在长页中的定位差异。</li><li>比较一次 token 词面查询与一次同义词查询，记录 hashing baseline 的失败案例。</li></ul></section>
+    <section id="next"><h2>12. 第 5 周：评测与真实检索基础设施</h2><p>下一阶段应先建立固定问题集和目标证据页码，量化 Recall@K、MRR、引用正确性与回答覆盖度；然后接入真实 embedding、向量数据库或 ANN 索引，拿同一评测集与当前基线对照。这样引入新技术是基于数据，不是因为“看起来更高级”。</p></section>
+  </main></div><footer>Paper Reading Assistant · 第 4 周本地 RAG 检索与可引用问答教程</footer>
+</body>
+</html>

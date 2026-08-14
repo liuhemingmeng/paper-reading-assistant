@@ -32,6 +32,11 @@
   - 文档、文本块与阅读洞见的 SQLite 持久化。
   - OpenAI 兼容 LLM 客户端：结构化摘要、5 个问题、有限重试和配置错误保护。
   - Fake LLM、上传失败和重传替换等完整流程测试。
+- 本地 RAG 检索与可引用问答（第 4 周）：
+  - 以可替换的 `TextEmbedder` 协议隔离 embedding 实现。
+  - 内置无依赖、可复现的 hashing vector 基线，用于建立 SQLite chunk 索引。
+  - Top-K 余弦检索返回文本、相似度、页码和章节引用。
+  - 问答仅使用检索证据，并把同一批证据作为 citations 返回。
 
 ## 环境要求
 
@@ -164,6 +169,25 @@ curl http://127.0.0.1:8000/papers/1/insight
 
 未配置这些变量时，生成接口会明确返回 `503`，不会把请求发送到未知服务。具体数据模型与边界见 [第 3 周 PDF/LLM 设计](docs/week-03-pdf-llm-design.md)。
 
+## RAG 检索与引用问答（第 4 周）
+
+PDF 上传完成后先显式建立本地索引，再检索问题相关的文本块：
+
+```bash
+curl -X POST http://127.0.0.1:8000/papers/1/retrieval:index
+curl "http://127.0.0.1:8000/papers/1/search?query=How%20does%20retrieval%20work%3F&limit=3"
+```
+
+搜索响应包含文本块、相似度、页码与章节名。当前使用本地 hashing vector 作为可复现学习基线，适合理解完整 RAG 流程；它不是语义 embedding 模型，后续将替换为真实 embedding 服务或模型。
+
+配置 LLM 后可生成只基于检索证据的回答：
+
+```bash
+curl -X POST "http://127.0.0.1:8000/papers/1/questions:answer?question=How%20does%20retrieval%20work%3F&limit=3"
+```
+
+响应中的 `citations` 与送入模型的证据一一对应。未建索引返回 `409`，空问题或无相关证据返回 `422`，未配置 LLM 时问答返回 `503`。设计取舍见 [第 4 周 RAG 设计](docs/week-04-rag-design.md)。
+
 ## 基础脚本示例
 
 文件批处理默认只预览，不修改文件：
@@ -216,7 +240,7 @@ python scripts/api_client.py https://httpbin.org/json --output data/api_response
 python -m pytest -q
 ```
 
-当前预期结果：`24 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理，以及 Fake LLM 洞见持久化。
+当前预期结果：`28 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理、本地向量索引、Top-K 引用检索，以及 Fake LLM 洞见与 RAG 回答边界。
 
 ## 教程
 
@@ -225,6 +249,7 @@ python -m pytest -q
 - [第 1 周：Python 工程底座教程](docs/tutorials/week-01-python-foundation.html)
 - [第 2 周：FastAPI + SQLite 论文管理 API 教程](docs/tutorials/week-02-fastapi-sqlite.html)
 - [第 3 周：PDF 解析与 LLM 阅读洞见教程](docs/tutorials/week-03-pdf-llm.html)
+- [第 4 周：本地 RAG 检索与可引用问答教程](docs/tutorials/week-04-rag-retrieval.html)
 
 也可以检查所有 Python 文件是否能编译：
 
@@ -248,7 +273,8 @@ python -m compileall -q scripts src tests
 ├── tests/
 ├── docs/
 │   ├── tutorials/
-│   └── week-03-pdf-llm-design.md
+│   ├── week-03-pdf-llm-design.md
+│   └── week-04-rag-design.md
 └── data/
 ```
 
@@ -266,7 +292,10 @@ python -m compileall -q scripts src tests
 - 用 `UploadFile` 分块落盘，而不是将任意文件一次性读入内存。
 - 用页码、章节名、序号维护文本来源，给后续 RAG 回答提供可引用证据。
 - 将外部 LLM API 封装为可替换客户端，并把配置、重试、响应校验放在边界层。
+- 区分 embedding、索引、检索、生成四个 RAG 阶段，而不是把它们混成一次模型调用。
+- 使用余弦相似度排序 Top-K evidence，并在最终回答中原样返回 citations。
+- 用接口协议和 FakeGenerator 隔离外部模型，使检索和引用链路可离线测试。
 
 ## 下一步
 
-第 4 周将在 `PaperChunk` 上构建向量索引和检索链路，再让 RAG 回答携带来源页码。此时第 3 周保存的分块、序号与页码就是检索和可解释回答的基础。
+第 5 周将用固定问题集评估检索命中和答案引用质量，再接入真实 embedding 或向量库作为对照。当前的本地 hashing baseline 是理解端到端 RAG、建立可回归评测的起点，不是最终检索模型。

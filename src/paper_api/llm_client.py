@@ -33,6 +33,17 @@ class InsightGenerator(Protocol):
         """Generate a summary and five answerable questions."""
 
 
+@dataclass(frozen=True)
+class GroundedAnswer:
+    answer: str
+    model: str
+
+
+class AnswerGenerator(Protocol):
+    def answer(self, question: str, evidence: str) -> GroundedAnswer:
+        """Answer only from supplied evidence."""
+
+
 class OpenAICompatibleClient:
     def __init__(self, base_url: str, api_key: str, model: str, timeout_seconds: float = 30.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -84,6 +95,46 @@ class OpenAICompatibleClient:
                 time.sleep(0.5 * (2**attempt))
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
                 raise LLMResponseError("LLM response did not contain a valid insight JSON object") from error
+
+        raise LLMResponseError("LLM request failed after 3 attempts") from last_error
+
+    def answer(self, question: str, evidence: str) -> GroundedAnswer:
+        payload = {
+            "model": self.model,
+            "temperature": 0.1,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You answer academic questions only from the supplied evidence. "
+                        "If the evidence is insufficient, say so clearly. Do not invent facts."
+                    ),
+                },
+                {"role": "user", "content": f"Question: {question}\n\nEvidence:\n{evidence}"},
+            ],
+        }
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        last_error: Exception | None = None
+
+        for attempt in range(3):
+            try:
+                with httpx.Client(timeout=self.timeout) as client:
+                    response = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
+                if response.status_code == 429 or response.status_code >= 500:
+                    raise httpx.HTTPStatusError("retryable LLM response", request=response.request, response=response)
+                response.raise_for_status()
+                content = response.json()["choices"][0]["message"]["content"]
+                answer = str(content).strip()
+                if not answer:
+                    raise LLMResponseError("LLM returned a blank answer")
+                return GroundedAnswer(answer=answer, model=self.model)
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as error:
+                last_error = error
+                if attempt == 2:
+                    break
+                time.sleep(0.5 * (2**attempt))
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                raise LLMResponseError("LLM response did not contain a valid answer") from error
 
         raise LLMResponseError("LLM request failed after 3 attempts") from last_error
 

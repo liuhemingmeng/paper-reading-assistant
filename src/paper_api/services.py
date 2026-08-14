@@ -8,9 +8,10 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .llm_client import InsightGenerator, ReadingInsight
-from .models import Paper, PaperChunk, PaperDocument, PaperInsight
+from .llm_client import AnswerGenerator, GroundedAnswer, InsightGenerator, ReadingInsight
+from .models import ChunkEmbedding, Paper, PaperChunk, PaperDocument, PaperInsight
 from .pdf_processing import ExtractedPage, TextChunk
+from .retrieval import LocalHashingEmbedder, TextEmbedder, cosine_similarity
 from .schemas import PaperCreate, PaperUpdate
 
 
@@ -24,6 +25,14 @@ class DocumentNotFoundError(Exception):
 
 class InsightNotFoundError(Exception):
     """Raised when a paper has no generated reading insight."""
+
+
+class RetrievalNotReadyError(Exception):
+    """Raised when a document has not been indexed for retrieval."""
+
+
+class NoRelevantEvidenceError(Exception):
+    """Raised when the query does not match indexed text."""
 
 
 def create_paper(session: Session, data: PaperCreate) -> Paper:
@@ -125,6 +134,89 @@ def list_chunks(session: Session, paper_id: int, offset: int, limit: int) -> lis
         .limit(limit)
     )
     return list(session.scalars(statement))
+
+
+def build_retrieval_index(
+    session: Session,
+    paper_id: int,
+    embedder: TextEmbedder | None = None,
+) -> tuple[str, int]:
+    document = get_document(session, paper_id)
+    embedder = embedder or LocalHashingEmbedder()
+    chunks = list(
+        session.scalars(
+            select(PaperChunk).where(PaperChunk.document_id == document.id).order_by(PaperChunk.sequence)
+        )
+    )
+    if not chunks:
+        raise RetrievalNotReadyError(f"Paper {paper_id} has no chunks to index")
+
+    session.query(ChunkEmbedding).filter(
+        ChunkEmbedding.chunk_id.in_([chunk.id for chunk in chunks])
+    ).delete(synchronize_session=False)
+    embeddings = []
+    model = ""
+    for chunk in chunks:
+        embedded = embedder.embed(chunk.content)
+        model = embedded.model
+        embeddings.append(
+            ChunkEmbedding(
+                chunk_id=chunk.id,
+                model=embedded.model,
+                dimensions=len(embedded.vector),
+                vector_json=json.dumps(embedded.vector),
+            )
+        )
+    session.add_all(embeddings)
+    session.commit()
+    return model, len(embeddings)
+
+
+def retrieve_chunks(
+    session: Session,
+    paper_id: int,
+    query: str,
+    limit: int = 3,
+    embedder: TextEmbedder | None = None,
+) -> list[tuple[PaperChunk, float]]:
+    if not query.strip():
+        raise ValueError("query must not be blank")
+    document = get_document(session, paper_id)
+    embedder = embedder or LocalHashingEmbedder()
+    query_vector = embedder.embed(query).vector
+    statement = (
+        select(PaperChunk, ChunkEmbedding)
+        .join(ChunkEmbedding, ChunkEmbedding.chunk_id == PaperChunk.id)
+        .where(PaperChunk.document_id == document.id)
+    )
+    records = list(session.execute(statement))
+    if not records:
+        raise RetrievalNotReadyError(f"Paper {paper_id} has not been indexed")
+
+    scored = [
+        (chunk, cosine_similarity(query_vector, json.loads(embedding.vector_json)))
+        for chunk, embedding in records
+    ]
+    ranked = sorted(scored, key=lambda item: (-item[1], item[0].sequence))[:limit]
+    if not ranked or ranked[0][1] <= 0:
+        raise NoRelevantEvidenceError(f"No relevant evidence found for paper {paper_id}")
+    return ranked
+
+
+def answer_question(
+    session: Session,
+    paper_id: int,
+    question: str,
+    generator: AnswerGenerator,
+    limit: int = 3,
+    embedder: TextEmbedder | None = None,
+) -> tuple[GroundedAnswer, list[tuple[PaperChunk, float]]]:
+    evidence = retrieve_chunks(session, paper_id, question, limit=limit, embedder=embedder)
+    prompt_evidence = "\n\n".join(
+        f"[chunk:{chunk.id}; page:{chunk.page_number}; section:{chunk.section_title or 'unknown'}]\n{chunk.content}"
+        for chunk, _ in evidence
+    )
+    return generator.answer(question, prompt_evidence), evidence
 
 
 def generate_insight(session: Session, paper_id: int, generator: InsightGenerator) -> PaperInsight:

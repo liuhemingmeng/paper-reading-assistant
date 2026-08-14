@@ -92,6 +92,27 @@ class PaperChunkRead(BaseModel):
     char_count: int
 
 
+class RetrievalResultRead(BaseModel):
+    chunk_id: int
+    sequence: int
+    page_number: int
+    section_title: str | None
+    content: str
+    score: float
+
+
+class RetrievalIndexRead(BaseModel):
+    paper_id: int
+    model: str
+    indexed_chunks: int
+
+
+class GroundedAnswerRead(BaseModel):
+    answer: str
+    model: str
+    citations: list[RetrievalResultRead]
+
+
 class PaperInsightRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
