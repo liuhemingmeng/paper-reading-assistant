@@ -22,6 +22,7 @@ venv/
 *.db
 *.json
 data/uploads/
+data/corpus/
 data/local-acceptance.pdf
 data/week5-acceptance.pdf
 data/week7-acceptance.pdf

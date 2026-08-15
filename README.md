@@ -56,6 +56,7 @@
   - 测试隔离：让 `client` fixture 显式注入离线 `LocalHashingEmbedder`，并新增多模态解析回归测试，避免真实 `.env` 污染测试。
   - 已用火山方舟 `doubao-embedding-vision-251215` 完成真实联网调用，返回 2048 维归一化向量。
   - 检索质量对比实验（同周）：`scripts/compare_embeddings.py` 用 6 页合成多主题文档 + 12 条问句（字面/语义两类）跑受控基准；火山语义模型 `Recall@K=1.0`、`MRR=1.0`，本地哈希基线 k≥3 也能 100% 召回但 k=1 `MRR=0.944`（语义类 0.833），证明 MRR 比 Recall@K 更能暴露 top-1 质量差距。
+  - 评测语料库（第 8 周扩展）：由 5 个子代理并行搜集 **138 篇**真实公开文档——arXiv 三领域（检索/RAG 26、LLM/Agent 30、Embedding 25）共 81 篇，行业资料（金融/招采 29、技术/标准/法规 28）共 57 篇；129 篇已下载、9 篇因登录墙/免责页记为 `link_only`。`scripts/build_corpus_manifest.py` 汇总为 `data/corpus/corpus_manifest.json`，供后续多模型 + reranker 检索基准使用。
 
 ## 环境要求
 
@@ -357,4 +358,4 @@ python -m compileall -q scripts src tests
 
 ## 下一步
 
-第 8 周已完成真实 Embedding 接入与检索质量对比实验（本地哈希基线 vs 火山语义向量，详见实验报告）。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。下一步建议把评测延伸到“答案质量”：配置真实 `LLM_*` 后用第 7 周 `scripts/evaluate_answers.py --faithfulness` 跑端到端答案评测报告，并尝试 answer-vs-reference 语义相似度或人工标注基准，形成“检索质量 → 答案质量”的完整评测闭环。
+第 8 周已完成真实 Embedding 接入、检索质量对比实验，并建成 138 篇真实公开评测语料库（详见 `docs/tutorials/week-08-embedding-experiment.html` 与 `data/corpus/README.md`）。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。下一步：待用户提供多个 embedding 模型 API（含 reranker）后，将 `scripts/compare_embeddings.py` 扩展为多模型注册表，在真实多文档语料上跑 local-hashing / BM25 / 火山 / 其他 embedding × 是否接 reranker 的 `Recall@K`、`MRR`、`nDCG@K` 并聚合到语料级，形成可写进简历的生产级检索评测基准；同时配置真实 `LLM_*` 用 `scripts/evaluate_answers.py --faithfulness` 跑答案质量闭环。
