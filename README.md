@@ -50,6 +50,11 @@
   - Faithfulness（可选 LLM 裁判）：判断答案是否仅基于检索证据，未配置时明确跳过。
   - 端到端报告同时包含 Recall@K、MRR、引用正确率与忠实率，可在同一固定评测集上对比。
   - `scripts/evaluate_answers.py` 提供命令行评测，`--fake` 无需任何 LLM 凭据即可演示离线链路。
+- 接入真实 Embedding（第 8 周）：
+  - `OpenAICompatibleEmbedder` 新增可配置 `EMBEDDING_ENDPOINT`，并适配火山方舟多模态端点 `/embeddings/multimodal` 的输入（`input` 为结构化对象数组）与响应（`data` 为单对象）。
+  - `EMBEDDING_*` 三变量齐全时切换真实模型；新增 `EMBEDDING_ENDPOINT`（默认 `/embeddings`）支持非标准端点。
+  - 测试隔离：让 `client` fixture 显式注入离线 `LocalHashingEmbedder`，并新增多模态解析回归测试，避免真实 `.env` 污染测试。
+  - 已用火山方舟 `doubao-embedding-vision-251215` 完成真实联网调用，返回 2048 维归一化向量。
 
 ## 环境要求
 
@@ -280,7 +285,7 @@ python scripts/api_client.py https://httpbin.org/json --output data/api_response
 python -m pytest -q
 ```
 
-当前预期结果：`43 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理、本地向量索引、Top-K 引用检索、RAG 回答边界、Recall@K/MRR 评测指标、可替换 embedding 客户端与混合模型防护，以及第 7 周的引用正确性、忠实度裁判与端到端答案评测路由。
+当前预期结果：`44 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理、本地向量索引、Top-K 引用检索、RAG 回答边界、Recall@K/MRR 评测指标、可替换 embedding 客户端与混合模型防护，以及第 7 周的引用正确性、忠实度裁判与端到端答案评测路由，和第 8 周的多模态 embedding 解析回归。
 
 ## 教程
 
@@ -293,6 +298,7 @@ python -m pytest -q
 - [第 5 周：RAG 检索与引用评测教程](docs/tutorials/week-05-rag-evaluation.html)
 - [第 6 周：可替换真实 Embedding 教程](docs/tutorials/week-06-embedding.html)
 - [第 7 周：答案质量评测教程](docs/tutorials/week-07-answer-evaluation.html)
+- [第 8 周：接入真实 Embedding（火山多模态）教程](docs/tutorials/week-08-embedding-config.html)
 
 也可以检查所有 Python 文件是否能编译：
 
@@ -349,4 +355,4 @@ python -m compileall -q scripts src tests
 
 ## 下一步
 
-第 8 周可把评测从“离线可跑”推进到“生产可对比”：配置真实 `EMBEDDING_*` 后重跑第 5 周评测集，量化对比本地 hashing 基线与语义向量；配置真实 `LLM_*` 后用第 7 周 `scripts/evaluate_answers.py --faithfulness` 跑答案质量报告，并尝试 answer-vs-reference 语义相似度或人工标注基准。当前的离线 Fake 链路保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
+第 8 周已完成真实 Embedding 接入（以火山方舟多模态为例），下一步可把评测从“离线可跑”推进到“生产可对比”：配置真实 `EMBEDDING_*` 后重跑第 5 周评测集，量化对比本地 hashing 基线与语义向量的 `Recall@K` / `MRR`；配置真实 `LLM_*` 后用第 7 周 `scripts/evaluate_answers.py --faithfulness` 跑答案质量报告，并尝试 answer-vs-reference 语义相似度或人工标注基准。当前的离线 Fake 链路保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。

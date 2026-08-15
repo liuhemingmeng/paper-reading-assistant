@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>第8周教程：接入真实 Embedding（火山方舟多模态）</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    max-width: 860px; margin: 32px auto; padding: 0 20px; line-height: 1.7;
+    color: #1f2328; background: #fff;
+  }
+  h1 { font-size: 26px; border-bottom: 3px solid #185FA5; padding-bottom: 10px; }
+  h2 { font-size: 20px; margin-top: 34px; color: #185FA5; }
+  h3 { font-size: 16px; margin-top: 22px; }
+  code { background: #f1efef; padding: 2px 6px; border-radius: 5px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 13px; }
+  pre { background: #0d1117; color: #e6edf3; padding: 16px; border-radius: 10px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; }
+  th, td { border: 1px solid #d0d7de; padding: 8px 12px; text-align: left; }
+  th { background: #eef4fb; }
+  .note { background: #fff8e6; border-left: 4px solid #d4a017; padding: 12px 16px; border-radius: 6px; margin: 16px 0; }
+  .ok { background: #eaf3de; border-left: 4px solid #3b6d11; padding: 12px 16px; border-radius: 6px; margin: 16px 0; }
+  .step { background: #eef4fb; border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
+</style>
+</head>
+<body>
+<h1>第8周教程：接入真实 Embedding（以火山方舟多模态为例）</h1>
+
+<p>前 7 周我们一直用<strong>本地哈希基线</strong>（<code>LocalHashingEmbedder</code>）跑通整条 RAG 链路——它不需要联网、不需要 Key、结果确定，非常适合开发和测试。但哈希向量是「词面相似」而非「语义相似」，检索质量有天花板。本周我们接入一个<strong>真实的语义向量模型</strong>，让检索真正理解含义，并为下周的量化对比实验打基础。</p>
+
+<div class="ok">
+<strong>目标达成状态：</strong> 已用火山方舟 <code>doubao-embedding-vision-251215</code> 完成真实联网调用，返回 2048 维向量，代码改造 + 测试（44 passed）+ 提交均已完成。
+</div>
+
+<h2>1. 为什么需要配置三样东西</h2>
+<p>项目在启动时调用 <code>get_default_embedder()</code>，它只看一件事：<code>EMBEDDING_BASE_URL</code> / <code>EMBEDDING_API_KEY</code> / <code>EMBEDDING_MODEL</code> 是否<strong>三者都填了</strong>。</p>
+<ul>
+  <li><strong>没填全</strong> → 自动回退本地哈希基线（开发默认）。</li>
+  <li><strong>三样都填</strong> → 切换到 <code>OpenAICompatibleEmbedder</code>，走真实向量模型。</li>
+</ul>
+
+<h2>2. 多模态模型的坑（关键）</h2>
+<p>你用的火山方舟 <code>doubao-embedding-vision-251215</code> 是<strong>多模态</strong>模型，它的接口和标准 OpenAI 有两处不同，代码必须适配：</p>
+<table>
+  <tr><th>维度</th><th>标准 OpenAI <code>/embeddings</code></th><th>火山多模态 <code>/embeddings/multimodal</code></th></tr>
+  <tr><td>请求路径</td><td><code>.../v1/embeddings</code></td><td><code>.../api/v3/embeddings/multimodal</code></td></tr>
+  <tr><td>请求体 <code>input</code></td><td><code>["文本字符串"]</code></td><td><code>[{"type":"text","text":"文本字符串"}]</code></td></tr>
+  <tr><td>响应 <code>data</code></td><td>数组 <code>[{embedding:[...]}]</code></td><td>对象 <code>{embedding:[...]}</code></td></tr>
+</table>
+<p>所以代码里新增了 <code>EMBEDDING_ENDPOINT</code> 变量（默认 <code>/embeddings</code>），当路径含 <code>multimodal</code> 时自动切换输入/输出格式。</p>
+
+<h2>3. 配置步骤</h2>
+<div class="step">
+<p><strong>① 复制模板</strong></p>
+<pre><code>cp .env.example .env</code></pre>
+</div>
+<div class="step">
+<p><strong>② 填入四个变量</strong>（<code>.env</code> 已在 <code>.gitignore</code> 中，不会被提交）</p>
+<pre><code>EMBEDDING_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+EMBEDDING_API_KEY=&lt;你的火山方舟 API Key&gt;
+EMBEDDING_MODEL=doubao-embedding-vision-251215
+EMBEDDING_ENDPOINT=/embeddings/multimodal</code></pre>
+</div>
+<div class="note">
+<strong>注意：</strong> <code>EMBEDDING_BASE_URL</code> 填到 <code>/api/v3</code> 即可，<code>/embeddings/multimodal</code> 由 <code>EMBEDDING_ENDPOINT</code> 拼接，二者不能重复写，否则路径会变成 <code>/embeddings/multimodal/embeddings</code>。
+</div>
+<div class="step">
+<p><strong>③ 重启服务 / 重开终端</strong>——环境变量在进程启动时读取，改完要重启才生效。</p>
+</div>
+
+<h2>4. 验证是否配通</h2>
+<p>一行命令检查当前用的是哪个 embedder：</p>
+<pre><code>python -c "from paper_api.embeddings import get_default_embedder; print(type(get_default_embedder()).__name__)"</code></pre>
+<p>输出 <code>OpenAICompatibleEmbedder</code> 即真实模型生效；<code>LocalHashingEmbedder</code> 说明变量没填全。</p>
+<p>真实联网 smoke（直连，绕过本地代理）：</p>
+<pre><code>unset http_proxy https_proxy
+python -c "
+from paper_api.embeddings import OpenAICompatibleEmbedder
+e = OpenAICompatibleEmbedder.from_environment()
+out = e.embed('天很蓝')
+print('dim=', len(out.vector), 'head=', [round(x,4) for x in out.vector[:5]])
+"</code></pre>
+<div class="ok">本机实测：<code>dim=2048</code>，模型 <code>doubao-embedding-vision-251215</code>，多模态端点生效，返回归一化向量。</div>
+
+<h2>5. 一个工程细节：测试隔离</h2>
+<p>引入真实 <code>.env</code> 后，我们发现原有测试会「隐式依赖无 .env 时回退本地基线」——一旦有了真实配置，测试就去联网导致失败。正确做法是让测试<strong>显式注入离线 embedder</strong>（<code>client</code> fixture 注入 <code>LocalHashingEmbedder()</code>），并新增一条多模态解析的回归测试。这样测试在 CI 里有真实 <code>.env</code> 也稳定。当前 <code>pytest</code> 结果为 <strong>44 passed</strong>。</p>
+
+<h2>6. 下一步</h2>
+<p>配置已就绪，最有含金量的动作是用第 5 周的固定评测集跑一次 <code>retrieval:evaluate</code>，量化对比「本地哈希基线 vs 火山真实模型」的 <code>Recall@K</code> / <code>MRR</code> 差异——这正是简历里能写进「检索效果优化」的实验。需要的话我可以接着帮你跑这个对比。</p>
+
+</body>
+</html>
