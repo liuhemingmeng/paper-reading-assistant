@@ -57,6 +57,10 @@
   - 已用火山方舟 `doubao-embedding-vision-251215` 完成真实联网调用，返回 2048 维归一化向量。
   - 检索质量对比实验（同周）：`scripts/compare_embeddings.py` 用 6 页合成多主题文档 + 12 条问句（字面/语义两类）跑受控基准；火山语义模型 `Recall@K=1.0`、`MRR=1.0`，本地哈希基线 k≥3 也能 100% 召回但 k=1 `MRR=0.944`（语义类 0.833），证明 MRR 比 Recall@K 更能暴露 top-1 质量差距。
   - 评测语料库（第 8 周扩展）：由 5 个子代理并行搜集 **138 篇**真实公开文档——arXiv 三领域（检索/RAG 26、LLM/Agent 30、Embedding 25）共 81 篇，行业资料（金融/招采 29、技术/标准/法规 28）共 57 篇；129 篇已下载、9 篇因登录墙/免责页记为 `link_only`。`scripts/build_corpus_manifest.py` 汇总为 `data/corpus/corpus_manifest.json`，供后续多模型 + reranker 检索基准使用。
+- 多模型检索评测底座（第 9 周）：
+  - 新增 `Reranker` 协议与 `SiliconFlowReranker`（`POST /v1/rerank`），与 `TextEmbedder` 协议对称，为两阶段检索（embedding 召回 + reranker 重排）做准备；含 3 次指数退避重试、错误边界与按分数降序的 `(index, score)` 解析（兼容 `relevance_score` 与 `score` 两种字段名）。
+  - 新增 `model_registry.py`：集中登记 5 个 embedding + 3 个 reranker 的端点与密钥（密钥只读 `.env`，不硬编码），供后续语料级基准按短名实例化。
+  - `scripts/smoke_models.py` 联网冒烟 9 个模型：**8/9 可达**——火山 `doubao-embedding-vision-251215`(2048 维)、硅基 `Qwen/Qwen3-VL-Embedding-8B`(4096 维)/`Qwen/Qwen3-Embedding-0.6B`(1024 维)/`BAAI/bge-m3`(1024 维)，以及 3 个硅基 reranker（`Qwen3-VL-Reranker-8B`/`Qwen3-Reranker-4B`/`Qwen3-Reranker-0.6B`）全部正常；火山 `doubao-embedding-large-text-250515` 返回 404 `InvalidEndpointOrModel.NotFound`（该模型在火山模型目录中状态为 `Retiring`/未对当前密钥开通）。已同步修复 embedding 与 rerank 客户端的错误透出，让重试失败时直接显示真实状态码与厂商报错，而非笼统的“重试 3 次失败”。
 
 ## 环境要求
 
@@ -287,7 +291,7 @@ python scripts/api_client.py https://httpbin.org/json --output data/api_response
 python -m pytest -q
 ```
 
-当前预期结果：`44 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理、本地向量索引、Top-K 引用检索、RAG 回答边界、Recall@K/MRR 评测指标、可替换 embedding 客户端与混合模型防护，以及第 7 周的引用正确性、忠实度裁判与端到端答案评测路由，和第 8 周的多模态 embedding 解析回归。
+当前预期结果：`53 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理、本地向量索引、Top-K 引用检索、RAG 回答边界、Recall@K/MRR 评测指标、可替换 embedding 客户端与混合模型防护，第 7 周的引用正确性、忠实度裁判与端到端答案评测路由，第 8 周的多模态 embedding 解析回归，以及第 9 周的 reranker 客户端（payload 构造、响应解析、容错与配置校验）。
 
 ## 教程
 
@@ -302,6 +306,7 @@ python -m pytest -q
 - [第 7 周：答案质量评测教程](docs/tutorials/week-07-answer-evaluation.html)
 - [第 8 周：接入真实 Embedding（火山多模态）教程](docs/tutorials/week-08-embedding-config.html)
 - [第 8 周：本地基线 vs 火山语义向量 检索对比实验报告](docs/tutorials/week-08-embedding-experiment.html)
+- [第 9 周：多模型注册表与 reranker 客户端教程](docs/tutorials/week-09-multimodel-reranker.html)
 
 也可以检查所有 Python 文件是否能编译：
 
@@ -358,4 +363,4 @@ python -m compileall -q scripts src tests
 
 ## 下一步
 
-第 8 周已完成真实 Embedding 接入、检索质量对比实验，并建成 138 篇真实公开评测语料库（详见 `docs/tutorials/week-08-embedding-experiment.html` 与 `data/corpus/README.md`）。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。下一步：待用户提供多个 embedding 模型 API（含 reranker）后，将 `scripts/compare_embeddings.py` 扩展为多模型注册表，在真实多文档语料上跑 local-hashing / BM25 / 火山 / 其他 embedding × 是否接 reranker 的 `Recall@K`、`MRR`、`nDCG@K` 并聚合到语料级，形成可写进简历的生产级检索评测基准；同时配置真实 `LLM_*` 用 `scripts/evaluate_answers.py --faithfulness` 跑答案质量闭环。
+第 8 周已完成真实 Embedding 接入、检索质量对比实验，并建成 138 篇真实公开评测语料库（详见 `docs/tutorials/week-08-embedding-experiment.html` 与 `data/corpus/README.md`）。第 9 周已落地 `Reranker` 协议 + `SiliconFlowReranker` 客户端、`model_registry.py` 多模型登记，以及 `scripts/smoke_models.py` 联网冒烟（8/9 模型可达；火山 `doubao-embedding-large-text-250515` 因 `Retiring`/未开通而 404，已记录并修复错误透出）。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。下一步：将 `scripts/compare_embeddings.py` 扩展为语料级基准，在 138 篇真实多文档上跑 local-hashing / BM25 / 各 embedding × 是否接 reranker 的 `Recall@K`、`MRR`、`nDCG@K` 并聚合到语料级；为此需先补一个 BM25 词法基线（行业金标准）并把 reranker 接入 `retrieve_chunks`（召回候选 N 个 → 重排取 top-K）。详见 `docs/tutorials/week-09-multimodel-reranker.html`。

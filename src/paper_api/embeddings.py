@@ -81,7 +81,8 @@ class OpenAICompatibleEmbedder:
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
                 raise EmbeddingResponseError("Embedding response did not contain a usable vector") from error
 
-        raise EmbeddingResponseError("Embedding request failed after 3 attempts") from last_error
+        detail = _describe_http_error(last_error) if isinstance(last_error, httpx.HTTPStatusError) else str(last_error)
+        raise EmbeddingResponseError(f"Embedding request failed after 3 attempts: {detail}") from last_error
 
     def _build_payload(self, text: str) -> dict[str, object]:
         if self.multimodal:
@@ -105,6 +106,17 @@ class OpenAICompatibleEmbedder:
         if not isinstance(vector, list) or not all(isinstance(value, (int, float)) for value in vector):
             raise EmbeddingResponseError("Embedding vector must be a list of numbers")
         return EmbeddedText(vector=normalize([float(value) for value in vector]), model=self.model)
+
+
+def _describe_http_error(error: httpx.HTTPStatusError) -> str:
+    """Surface the real status code and provider message instead of a generic retry error."""
+    response = error.response
+    body = ""
+    try:
+        body = response.text[:300]
+    except Exception:  # noqa: BLE001 - best-effort diagnostics only
+        body = ""
+    return f"HTTP {response.status_code}: {body}" if body else f"HTTP {response.status_code}"
 
 
 def get_default_embedder() -> TextEmbedder:
