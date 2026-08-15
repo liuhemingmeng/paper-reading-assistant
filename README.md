@@ -55,6 +55,7 @@
   - `EMBEDDING_*` 三变量齐全时切换真实模型；新增 `EMBEDDING_ENDPOINT`（默认 `/embeddings`）支持非标准端点。
   - 测试隔离：让 `client` fixture 显式注入离线 `LocalHashingEmbedder`，并新增多模态解析回归测试，避免真实 `.env` 污染测试。
   - 已用火山方舟 `doubao-embedding-vision-251215` 完成真实联网调用，返回 2048 维归一化向量。
+  - 检索质量对比实验（同周）：`scripts/compare_embeddings.py` 用 6 页合成多主题文档 + 12 条问句（字面/语义两类）跑受控基准；火山语义模型 `Recall@K=1.0`、`MRR=1.0`，本地哈希基线 k≥3 也能 100% 召回但 k=1 `MRR=0.944`（语义类 0.833），证明 MRR 比 Recall@K 更能暴露 top-1 质量差距。
 
 ## 环境要求
 
@@ -299,6 +300,7 @@ python -m pytest -q
 - [第 6 周：可替换真实 Embedding 教程](docs/tutorials/week-06-embedding.html)
 - [第 7 周：答案质量评测教程](docs/tutorials/week-07-answer-evaluation.html)
 - [第 8 周：接入真实 Embedding（火山多模态）教程](docs/tutorials/week-08-embedding-config.html)
+- [第 8 周：本地基线 vs 火山语义向量 检索对比实验报告](docs/tutorials/week-08-embedding-experiment.html)
 
 也可以检查所有 Python 文件是否能编译：
 
@@ -355,4 +357,4 @@ python -m compileall -q scripts src tests
 
 ## 下一步
 
-第 8 周已完成真实 Embedding 接入（以火山方舟多模态为例），下一步可把评测从“离线可跑”推进到“生产可对比”：配置真实 `EMBEDDING_*` 后重跑第 5 周评测集，量化对比本地 hashing 基线与语义向量的 `Recall@K` / `MRR`；配置真实 `LLM_*` 后用第 7 周 `scripts/evaluate_answers.py --faithfulness` 跑答案质量报告，并尝试 answer-vs-reference 语义相似度或人工标注基准。当前的离线 Fake 链路保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
+第 8 周已完成真实 Embedding 接入与检索质量对比实验（本地哈希基线 vs 火山语义向量，详见实验报告）。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。下一步建议把评测延伸到“答案质量”：配置真实 `LLM_*` 后用第 7 周 `scripts/evaluate_answers.py --faithfulness` 跑端到端答案评测报告，并尝试 answer-vs-reference 语义相似度或人工标注基准，形成“检索质量 → 答案质量”的完整评测闭环。
