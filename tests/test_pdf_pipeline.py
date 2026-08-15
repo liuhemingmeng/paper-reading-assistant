@@ -31,7 +31,7 @@ from paper_api.services import (
 
 @pytest.fixture
 def client(tmp_path: Path) -> Generator[TestClient, None, None]:
-    with TestClient(create_app("sqlite://", upload_root=tmp_path / "uploads")) as test_client:
+    with TestClient(create_app("sqlite://", upload_root=tmp_path / "uploads", embedder=LocalHashingEmbedder())) as test_client:
         yield test_client
 
 
@@ -375,6 +375,7 @@ def test_get_default_embedder_falls_back_to_local_baseline(monkeypatch: pytest.M
     monkeypatch.delenv("EMBEDDING_BASE_URL", raising=False)
     monkeypatch.delenv("EMBEDDING_API_KEY", raising=False)
     monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+    monkeypatch.setattr("paper_api.embeddings.load_local_env", lambda: None)
 
     assert isinstance(get_default_embedder(), LocalHashingEmbedder)
 
@@ -387,6 +388,51 @@ def test_get_default_embedder_uses_real_embedder_when_configured(monkeypatch: py
     embedder = get_default_embedder()
     assert isinstance(embedder, OpenAICompatibleEmbedder)
     assert embedder.model == "emb-model"
+
+
+def test_volcano_multimodal_embedder_builds_and_parses_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        status_code: int = 200
+
+        def json(self) -> dict[str, object]:
+            return {"data": {"embedding": [0.8, 0.6]}, "model": "doubao-embedding-vision-251215"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self) -> "_FakeClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def post(self, url: str, headers=None, json=None) -> _FakeResponse:
+            captured["url"] = url
+            captured["json"] = json
+            return _FakeResponse()
+
+    monkeypatch.setattr("paper_api.embeddings.httpx.Client", _FakeClient)
+    embedder = OpenAICompatibleEmbedder(
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
+        api_key="ark-test",
+        model="doubao-embedding-vision-251215",
+        endpoint="/embeddings/multimodal",
+    )
+
+    result = embedder.embed("天很蓝")
+
+    assert captured["url"].endswith("/embeddings/multimodal")
+    payload = captured["json"]
+    assert isinstance(payload, dict)
+    assert payload["input"] == [{"type": "text", "text": "天很蓝"}]
+    assert payload.get("encoding_format") == "float"
+    assert result.vector == pytest.approx([0.8, 0.6])
 
 
 def test_injected_fake_embedder_indexes_and_retrieves(tmp_path: Path) -> None:
