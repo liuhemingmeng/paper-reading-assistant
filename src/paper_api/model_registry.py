@@ -8,6 +8,7 @@ registry only ever hands back configured clients or spec objects.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 
@@ -120,6 +121,35 @@ def build_reranker(spec: RerankerSpec) -> SiliconFlowReranker:
     return SiliconFlowReranker(base_url=spec.base_url, api_key=spec.api_key, model=spec.model)
 
 
+def get_reachable_embedder_specs(smoke_path: str = "data/model_smoke.json") -> list[EmbedderSpec]:
+    """Only embedding models proven reachable by ``scripts/smoke_models.py``.
+
+    The smoke run records live status per model name; this filter drops any
+    model that returned an error (e.g. a retired endpoint) so the benchmark
+    never spends time on calls that are known to fail.
+    """
+    specs = get_embedder_specs()
+    try:
+        with open(smoke_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return []
+    ok = {item["name"] for item in data.get("embedders", []) if item.get("status") == "ok"}
+    return [spec for spec in specs if spec.name in ok]
+
+
+def get_reachable_reranker_specs(smoke_path: str = "data/model_smoke.json") -> list[RerankerSpec]:
+    """Only reranker models proven reachable by the smoke run."""
+    specs = get_reranker_specs()
+    try:
+        with open(smoke_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return []
+    ok = {item["name"] for item in data.get("rerankers", []) if item.get("status") == "ok"}
+    return [spec for spec in specs if spec.name in ok]
+
+
 __all__ = [
     "EmbedderSpec",
     "RerankerSpec",
@@ -127,4 +157,6 @@ __all__ = [
     "build_reranker",
     "get_embedder_specs",
     "get_reranker_specs",
+    "get_reachable_embedder_specs",
+    "get_reachable_reranker_specs",
 ]

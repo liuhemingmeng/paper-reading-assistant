@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -62,3 +63,63 @@ def normalize(vector: list[float]) -> list[float]:
     if magnitude == 0:
         return vector
     return [value / magnitude for value in vector]
+
+
+class BM25Retriever:
+    """Offline lexical baseline using Okapi BM25.
+
+    Tokenization reuses :data:`TOKEN_PATTERN` from this module so the lexical
+    baseline is directly comparable to :class:`LocalHashingEmbedder`. Chinese runs
+    are kept whole (not segmented), which intentionally handicaps BM25 on the
+    Chinese industry subset — itself an instructive finding about lexical
+    retrieval on CJK text.
+    """
+
+    def __init__(self, k1: float = 1.5, b: float = 0.75) -> None:
+        self.k1 = k1
+        self.b = b
+        self._doc_ids: list[str] = []
+        self._doc_freqs: list[Counter] = []
+        self._doc_len: list[int] = []
+        self._idf: dict[str, float] = {}
+        self._avgdl: float = 0.0
+
+    def fit(self, items: list[tuple[str, str]]) -> "BM25Retriever":
+        self._doc_ids = [doc_id for doc_id, _ in items]
+        tokenized = [Counter(TOKEN_PATTERN.findall(text.lower())) for _, text in items]
+        self._doc_freqs = tokenized
+        self._doc_len = [sum(freq.values()) for freq in tokenized]
+        total = sum(self._doc_len) or 1
+        self._avgdl = total / max(len(tokenized), 1)
+        df: Counter = Counter()
+        for freq in tokenized:
+            for token in freq:
+                df[token] += 1
+        n = len(tokenized)
+        self._idf = {
+            token: math.log(1 + (n - freq + 0.5) / (freq + 0.5)) for token, freq in df.items()
+        }
+        return self
+
+    def search(self, query: str, top_n: int | None = None) -> list[tuple[str, float]]:
+        """Return ``(doc_id, score)`` pairs sorted by descending BM25 score."""
+        q_tokens = TOKEN_PATTERN.findall(query.lower())
+        scores: list[float] = []
+        for i, freq in enumerate(self._doc_freqs):
+            score = 0.0
+            doc_len = self._doc_len[i]
+            for token in q_tokens:
+                idf = self._idf.get(token)
+                if idf is None:
+                    continue
+                tf = freq.get(token, 0)
+                if tf == 0:
+                    continue
+                score += idf * (tf * (self.k1 + 1)) / (
+                    tf + self.k1 * (1 - self.b + self.b * doc_len / self._avgdl)
+                )
+            scores.append(score)
+        ranked = sorted(range(len(scores)), key=lambda i: -scores[i])
+        if top_n is not None:
+            ranked = ranked[:top_n]
+        return [(self._doc_ids[i], scores[i]) for i in ranked]

@@ -23,6 +23,10 @@ venv/
 *.json
 data/uploads/
 data/corpus/
+data/*.log
+data/embed_cache/
+data/rerank_cache/
+data/corpus_text_cache.json
 data/local-acceptance.pdf
 data/week5-acceptance.pdf
 data/week7-acceptance.pdf
