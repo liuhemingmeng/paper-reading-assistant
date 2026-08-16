@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>第 13 周：GitHub 同类项目对比分析与改善路线图</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --card: #ffffff; --ink: #1f2329; --muted: #5b6470; --line: #e4e7ec;
+    --accent: #2b6de5; --accent-soft: #eaf1ff;
+    --good: #1f8a4c; --good-soft: #e7f6ed;
+    --warn: #b54708; --warn-soft: #fdf0e6; --bad: #c0392b; --bad-soft: #fdecea;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.7; font-size: 15px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  header.hero { background: linear-gradient(135deg, #2b6de5, #1f4fb0); color: #fff; border-radius: 16px; padding: 28px 30px; margin-bottom: 28px; box-shadow: 0 6px 22px rgba(43,109,229,.25); }
+  header.hero h1 { margin: 0 0 6px; font-size: 25px; }
+  header.hero p { margin: 0; opacity: .92; font-size: 14px; }
+  .tag { display:inline-block; background: rgba(255,255,255,.18); border-radius: 999px; padding: 2px 12px; font-size: 12px; margin-right: 8px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px 26px; margin-bottom: 20px; }
+  h2 { font-size: 19px; margin: 0 0 14px; padding-left: 12px; border-left: 4px solid var(--accent); }
+  h3 { font-size: 16px; margin: 22px 0 10px; color: #2b3a52; }
+  p { margin: 10px 0; }
+  code { font-family: var(--mono); background: #f0f2f5; padding: 1px 6px; border-radius: 5px; font-size: 13px; color: #b54708; }
+  pre { background: #0f1626; color: #d6e2ff; padding: 16px 18px; border-radius: 10px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.6; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 7px 9px; text-align: center; vertical-align: top; }
+  th { background: var(--accent-soft); color: #1f3d7a; font-weight: 600; }
+  td.name, th.name { text-align: left; font-weight: 600; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .callout { border-radius: 10px; padding: 14px 16px; margin: 16px 0; font-size: 14px; }
+  .callout.good { background: var(--good-soft); border-left: 4px solid var(--good); }
+  .callout.warn { background: var(--warn-soft); border-left: 4px solid var(--warn); }
+  .callout.info { background: var(--accent-soft); border-left: 4px solid var(--accent); }
+  .callout.bad  { background: var(--bad-soft);  border-left: 4px solid var(--bad); }
+  .hl-good { color: var(--good); font-weight: 700; }
+  .hl-bad { color: var(--bad); font-weight: 700; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: #fff; }
+  .card h4 { margin: 0 0 6px; font-size: 15px; color: var(--accent); }
+  .card .meta { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .card ul { margin: 6px 0; padding-left: 18px; font-size: 13px; }
+  .pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:999px; margin-right:4px; }
+  .pill.p0 { background: var(--bad-soft); color: var(--bad); font-weight:700; }
+  .pill.p1 { background: var(--warn-soft); color: var(--warn); font-weight:700; }
+  .pill.p2 { background: var(--accent-soft); color: var(--accent); font-weight:700; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+  .step { display:flex; gap:12px; align-items:flex-start; margin:10px 0; }
+  .step .n { flex:0 0 26px; height:26px; border-radius:50%; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>第 13 周：GitHub 同类项目对比分析与改善路线图</h1>
+  <p><span class="tag">同学</span><span class="tag">竞品调研</span><span class="tag">架构对标</span><span class="tag">改善优先级</span></p>
+</header>
+
+<div class="callout info">
+  <strong>一句话结论：</strong>本项目的<strong>工程质量与评测闭环已经强于绝大多数轻量开源项目</strong>（清晰分层、65 测试、IR 指标 + faithfulness 评估、可续跑缓存），但<strong>产品化与检索架构落后一代</strong>：当前 API 是「单篇论文维度 + SQLite JSON 暴力余弦」，而成熟的 paper RAG（paper-qa / RAGFlow）是「语料库维度 + 向量库 ANN + 重排/混合检索」，且都有前端与鉴权。把<strong>跨库检索 + pgvector（已装好）+ 最小前端 + 鉴权</strong>补齐，即可从「评测原型」跃迁为「可上线产品」。
+</div>
+
+<section>
+  <h2>一、调研方法</h2>
+  <p>为找可对标项目，在 GitHub 上调研了两类：</p>
+  <ul>
+    <li><strong>深度 / 生产级标杆</strong>：<code>Future-House/paper-qa</code>（学术论文 RAG QA 标杆）、<code>infiniflow/RAGFlow</code>（文档 RAG 引擎，国产）。</li>
+    <li><strong>轻量 / 同源对标</strong>：<code>Guri10/QueryGenie</code>（arXiv ML 论文问答，FastAPI+React+FAISS）、<code>hrushik98/Arxiv-researcher</code>（单篇 arxiv 对话，per-paper Qdrant + 前端 + 鉴权）、<code>gpscal/rag-research-assistant</code>、<code>shashankag14/arxiv_chatbot</code>（Streamlit 轻量版）。</li>
+  </ul>
+  <p class="muted">信息来源：各仓库 GitHub README（WebFetch 直读）+ GitHub 搜索结果，聚焦「检索维度 / 向量库 / 重排 / 引用 / 评估 / 前端 / 鉴权 / 部署」等可比维度。</p>
+</section>
+
+<section>
+  <h2>二、代表项目速览</h2>
+  <div class="grid2">
+    <div class="card">
+      <h4>paper-qa（Future-House）</h4>
+      <div class="meta">学术论文 RAG QA 标杆 · Python 库 + CLI</div>
+      <ul>
+        <li><strong>Agentic 检索</strong>：LLM 调度 search→gather evidence→answer 迭代</li>
+        <li><strong>LLM 重排 + 上下文摘要（RCS）</strong>，evidence 分数 cutoff 控幻觉</li>
+        <li><strong>in-text citations</strong> <code>(Author2011 pages 1-2)</code>，自动拉 Crossref/Semantic Scholar 元数据</li>
+        <li>向量：默认内存 Numpy，大规模用 Qdrant</li>
+        <li>评估：LitQA2 基准（自称超人类）</li>
+        <li><span class="hl-bad">无 Web UI</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>RAGFlow（infiniflow）</h4>
+      <div class="meta">文档 RAG 引擎 · 国产 · Docker 镜像</div>
+      <ul>
+        <li><strong>DeepDoc 深度解析</strong>：版式/表格/公式/OCR、邮件格式</li>
+        <li><strong>模板化分块</strong>（智能可解释）</li>
+        <li>向量引擎：Elasticsearch / Infinity 可切换</li>
+        <li><strong>完整 Web UI</strong> + grounded citations 减幻觉</li>
+        <li>部署：官方 Docker 镜像</li>
+        <li><span class="hl-bad">未内置模型效果评测</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>QueryGenie（Guri10）</h4>
+      <div class="meta">轻量可上线范本 · FastAPI + React + FAISS</div>
+      <ul>
+        <li><strong>跨库检索</strong>：arXiv→FAISS（all-MiniLM-L6-v2，24k chunks）</li>
+        <li><strong>前后端分离</strong>：React 18 + TS + Tailwind 前端</li>
+        <li><strong>把 FAISS 索引提交进 repo</strong> 实现零成本部署（Render.com）</li>
+        <li><span class="hl-bad">无重排、无鉴权、无评测</span></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Arxiv-researcher（hrushik98）</h4>
+      <div class="meta">单篇维度对标 · 最像本项目</div>
+      <ul>
+        <li><strong>per-paper Qdrant 索引</strong>（和我们的 per-paper SQLite 同思路）</li>
+        <li><strong>混合检索</strong>：dense(bge-small) + sparse(bm25) + RRF(0.7/0.3) + cross-encoder rerank</li>
+        <li><strong>Next.js 前端 + 邮箱密码鉴权（Neon Postgres + JWT）</strong></li>
+        <li>PDF 侧栏渲染 + Highlight &amp; Ask</li>
+        <li><span class="hl-bad">临时存储（容器停即删）</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>三、核心对比表</h2>
+  <table>
+    <thead>
+      <tr>
+        <th class="name">维度</th>
+        <th class="name">本项目</th>
+        <th class="name">paper-qa</th>
+        <th class="name">RAGFlow</th>
+        <th class="name">QueryGenie</th>
+        <th class="name">Arxiv-researcher</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="name">检索维度</td><td><span class="hl-bad">单篇 paper</span></td><td><span class="hl-good">语料库</span></td><td>语料库</td><td><span class="hl-good">语料库</span></td><td>单篇 paper</td></tr>
+      <tr><td class="name">向量存储</td><td>SQLite JSON 暴力余弦</td><td>Numpy / Qdrant</td><td>ES / Infinity</td><td>FAISS</td><td>Qdrant</td></tr>
+      <tr><td class="name">重排 / 混合</td><td>有 rerank 模块未接 API</td><td>LLM RCS 重排</td><td>未明</td><td>无</td><td>cross-encoder rerank + RRF</td></tr>
+      <tr><td class="name">引用 citation</td><td><span class="hl-good">有（GroundedAnswer）</span></td><td>in-text citations</td><td>grounded</td><td>Sources 列表</td><td>有</td></tr>
+      <tr><td class="name">忠实度评估</td><td><span class="hl-good">有 faithfulness judge</span></td><td>evidence cutoff</td><td>—</td><td>—</td><td>—</td></tr>
+      <tr><td class="name">Web UI</td><td><span class="hl-bad">无（仅 /docs）</span></td><td>无（库）</td><td><span class="hl-good">完整</span></td><td><span class="hl-good">React</span></td><td><span class="hl-good">Next.js</span></td></tr>
+      <tr><td class="name">鉴权</td><td><span class="hl-bad">无</span></td><td>无</td><td>有</td><td>无</td><td><span class="hl-good">JWT</span></td></tr>
+      <tr><td class="name">多轮对话</td><td><span class="hl-bad">无（无状态）</span></td><td>无</td><td>有</td><td>无</td><td>无</td></tr>
+      <tr><td class="name">文档解析</td><td>PyMuPDF 文本</td><td>PDF/文本/Office/源码</td><td><span class="hl-good">DeepDoc 深度</span></td><td>arXiv 下载</td><td>PyMuPDF+TOC</td></tr>
+      <tr><td class="name">评估基准</td><td><span class="hl-good">IR 指标 + faithfulness harness</span></td><td>LitQA2</td><td>—</td><td>—</td><td>—</td></tr>
+      <tr><td class="name">部署</td><td>Dockerfile 在服务器</td><td>pip 库</td><td>Docker 镜像</td><td>Render+Docker</td><td>docker-compose</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">注：红字为本项目相对落后的关键项；绿字为本项目已具备、多数轻量项目反而缺失的能力。</p>
+</section>
+
+<section>
+  <h2>四、本项目已经做对的事（别动）</h2>
+  <div class="callout good">
+    <ul style="margin:6px 0">
+      <li><strong>清晰分层架构</strong>：api / services / database / schemas / embeddings / retrieval / llm_client / evaluation 职责分离，易测易改。</li>
+      <li><strong>评测闭环领先</strong>：IR 指标（recall/mrr/ndcg）+ faithfulness judge + 真实 QA 基准 harness，大多数轻量项目<strong>完全没有评测</strong>。这是你面试/简历的差异化亮点。</li>
+      <li><strong>工程健壮性</strong>：规范错误映射（404/422/409/502/503）、可续跑缓存（cache_io 解决 Windows 文件锁）、65 单测。</li>
+      <li><strong>引用与忠实度 API 已存在</strong>：<code>/questions:answer</code> 返回带 citation 的 grounded 答案，<code>/answers:evaluate</code> 可跑 faithfulness——比 QueryGenie/Arxiv-researcher 更严谨。</li>
+      <li><strong>已选定并经基准验证的配置</strong>：bge-m3 + deepseek-v4-flash + 1000/120 chunking，无需再横测。</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>五、可改善项（按价值排序）</h2>
+
+  <h3><span class="pill p0">P0</span> 上线必须具备</h3>
+
+  <div class="callout bad">
+    <strong>1. 跨语料库检索（最关键的架构缺口）</strong>
+    <p>现状：所有检索路由都是 <code>/papers/{paper_id}/search</code>（单篇维度），跨 129 篇语料库的检索完全没有 API 支持——我们的 demo/benchmark 是绕过 API 直接读缓存文件做的。而 paper-qa / QueryGenie / RAGFlow 都是<strong>集合/库维度</strong>检索，这才是 RAG 的核心价值。</p>
+    <p><strong>借鉴</strong>：paper-qa 的 <code>Docs</code>（一个论文集合）、QueryGenie 的全局 FAISS。<strong>怎么做</strong>：新增 <code>/library/search</code> 与 <code>/library/questions:answer</code>，支持「在全部已索引论文里检索/问答」，沿用现有 <code>retrieve_chunks</code> 逻辑但去掉 <code>paper_id</code> 过滤。</p>
+  </div>
+
+  <div class="callout bad">
+    <strong>2. 接入 pgvector（替代 SQLite JSON 暴力余弦）</strong>
+    <p>现状：向量以 <code>vector_json</code> 长文本存 SQLite，检索时把该 paper 所有 chunk 向量 load 进内存逐条算余弦——129 篇×13976 chunk 会慢、吃内存、无法 ANN。pgvector 容器<strong>已在华为云 ECS 装好（vector 0.8.6，功能验证通过）</strong>但没接进 API。</p>
+    <p><strong>怎么做</strong>：把 <code>ChunkEmbedding.vector_json</code> 迁到 pgvector 的 <code>vector</code> 列，检索用 <code>&lt;-&gt;</code> 运算符 + ivfflat/hnsw 索引；这同时解决<strong>规模、并发、持久、故障恢复</strong>四个上生产的硬伤（第 12 周教程已列为第一基石）。</p>
+  </div>
+
+  <div class="callout bad">
+    <strong>3. 最小前端 UI + 鉴权</strong>
+    <p>现状：只有 FastAPI <code>/docs</code>，公网裸奔（无 API Key/JWT）。所有对标项目（除 paper-qa 库）都有前端；Arxiv-researcher 还有 JWT 鉴权。用户没有 UI 就无法用。</p>
+    <p><strong>借鉴</strong>：QueryGenie 的 React 聊天页、Arxiv-researcher 的 Next.js + JWT。<strong>怎么做</strong>：先用一个静态聊天页（HTML+fetch）打通 <code>/library/questions:answer</code>；鉴权加 FastAPI 依赖（API Key 或 JWT），未带 token 返回 401（第 12 周部署 8 步已规划）。</p>
+  </div>
+
+  <div class="callout warn">
+    <strong>4. Dockerfile 入仓库 + 生产进程</strong>
+    <p>现状：Dockerfile 在服务器 <code>/opt/rag</code>，未纳入版本控制；<code>__main__.py</code> 用 uvicorn <code>reload</code> 开发模式。<strong>怎么做</strong>：仓库加 <code>Dockerfile</code>（python:3.11-slim）+ <code>gunicorn -k uvicorn.UvicornWorker -w 2</code>，取消 compose 里 app 服务注释（脚手架已备好）。</p>
+  </div>
+
+  <h3><span class="pill p1">P1</span> 体验与质量增强</h3>
+
+  <div class="callout info">
+    <strong>5. reranker 接入 API + 可选混合检索</strong>
+    <p>代码已有 <code>rerank.py</code>（qwen3-rerank-4b/0.6b）和 <code>BM25Retriever</code>，但 API 检索只用 embedder。借鉴 Arxiv-researcher 的 dense+sparse+RRF+cross-encoder：默认 bge-m3 单阶段（已验证够强），对难问题启用「BM25 + bge-m3 → RRF 融合 → reranker 精排」两阶段。</p>
+  </div>
+
+  <div class="callout info">
+    <strong>6. 多轮对话 / 历史</strong>
+    <p>现状：<code>/questions:answer</code> 无状态。借鉴 arxiv_chatbot 的 memory：加会话表存历史，把前轮 Q&A 作为上下文拼进 prompt，支持「追问」。</p>
+  </div>
+
+  <div class="callout info">
+    <strong>7. arXiv / 论文元数据自动拉取</strong>
+    <p>借鉴 paper-qa（Crossref/Semantic Scholar）：上传 arxiv 链接后自动补全标题/作者/摘要/引用数，省去手填 metadata，也为 citation 提供规范出处。</p>
+  </div>
+
+  <h3><span class="pill p2">P2</span> 差异化（可选）</h3>
+
+  <div class="callout info">
+    <strong>8. 文档解析增强</strong>：借鉴 RAGFlow DeepDoc，加表格/版面对齐的 chunking、扫描件 OCR，提升中文行业 PDF 的召回质量（当前 PyMuPDF 仅抽文本）。<br>
+    <strong>9. 评估接成持续回归</strong>：把现有 benchmark harness 接成 CI 或一键脚本，每次改检索逻辑自动跑 IR 指标，防止退化。<br>
+    <strong>10. 自托管 embedding</strong>：bge-m3 可本地部署，规避云上外部 API 的网络抖动（我们之前就踩过 SSL 断流）。
+  </div>
+</section>
+
+<section>
+  <h2>六、建议实施顺序（路线图）</h2>
+  <div class="step"><div class="n">1</div><div><strong>接 pgvector + 跨库检索 API</strong>（P0-1/2 合并，复用已装容器）。这是地基，做完检索质量与规模问题一并解决。</div></div>
+  <div class="step"><div class="n">2</div><div><strong>Dockerfile 入仓 + gunicorn 生产进程 + Nginx 反代</strong>（P0-4），华为云安全组开 80/443。</div></div>
+  <div class="step"><div class="n">3</div><div><strong>最小前端聊天页 + API Key 鉴权</strong>（P0-3），端到端公网可访问。</div></div>
+  <div class="step"><div class="n">4</div><div><strong>reranker 接入 + 混合检索 + 多轮对话</strong>（P1），体验对齐 Arxiv-researcher。</div></div>
+  <div class="step"><div class="n">5</div><div><strong>arXiv 元数据自动拉取 + 解析增强 + 评估回归</strong>（P2），形成完整产品闭环。</div></div>
+  <div class="callout good" style="margin-top:18px">
+    <strong>投入产出比最高的第一刀</strong>：先做 P0-1/2（pgvector + 跨库检索）。它不改变你已做对的架构与评测，只把「单篇暴力余弦」升级为「跨库 ANN 向量库」——一次性补齐规模、并发、持久、跨库检索四个最大短板，且华为云环境已就绪。
+  </div>
+</section>
+
+<section>
+  <h2>七、风险提示</h2>
+  <ul>
+    <li><strong>不要为「追平 RAGFlow」过度设计</strong>：DeepDoc 级解析投入巨大，且与你的实习目标（RAG/Agent/Python 后端）不匹配；聚焦检索架构 + 产品化即可。</li>
+    <li><strong>评测资产是你的护城河</strong>：保持 IR 指标 + faithfulness 闭环，面试时能讲清「为什么选 bge-m3、怎么验证 recall、怎么防幻觉」远比「又接了个前端」值钱。</li>
+    <li><strong>密钥安全</strong>：华为云 <code>/opt/rag/.env</code> 已预填 API key（gitignored）；本地项目 <code>.venv/KeyPair-a7de.*</code> 仍建议删除，避免打包泄露。</li>
+  </ul>
+</section>
+
+<footer style="text-align:center;color:var(--muted);font-size:13px;margin-top:24px">Paper Reading Assistant · 第 13 周 GitHub 同类项目对比分析 · 调研基准日 2026-08-17</footer>
+
+</div>
+</body>
+</html>
