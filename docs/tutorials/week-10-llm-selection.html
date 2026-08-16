@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>第 10 周：接入真实 LLM（RAG 答案生成）与清理 reranker</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --ink: #1f2329;
+    --muted: #5b6470;
+    --line: #e4e7ec;
+    --accent: #2b6de5;
+    --accent-soft: #eaf1ff;
+    --good: #1f8a4c;
+    --good-soft: #e7f6ed;
+    --warn: #b54708;
+    --warn-soft: #fdf0e6;
+    --bad: #c0392b;
+    --bad-soft: #fdecea;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.7; font-size: 15px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; }
+  header.hero {
+    background: linear-gradient(135deg, #2b6de5, #1f4fb0);
+    color: #fff; border-radius: 16px; padding: 28px 30px; margin-bottom: 28px;
+    box-shadow: 0 6px 22px rgba(43,109,229,.25);
+  }
+  header.hero h1 { margin: 0 0 6px; font-size: 25px; }
+  header.hero p { margin: 0; opacity: .92; font-size: 14px; }
+  .tag { display:inline-block; background: rgba(255,255,255,.18); border-radius: 999px; padding: 2px 12px; font-size: 12px; margin-right: 8px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px 26px; margin-bottom: 20px; }
+  h2 { font-size: 19px; margin: 0 0 14px; padding-left: 12px; border-left: 4px solid var(--accent); }
+  h3 { font-size: 16px; margin: 22px 0 10px; color: #2b3a52; }
+  p { margin: 10px 0; }
+  code { font-family: var(--mono); background: #f0f2f5; padding: 1px 6px; border-radius: 5px; font-size: 13px; color: #b54708; }
+  pre { background: #0f1626; color: #d6e2ff; padding: 16px 18px; border-radius: 10px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.6; }
+  pre .c { color: #6b7a99; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: center; }
+  th { background: var(--accent-soft); color: #1f3d7a; font-weight: 600; }
+  td.name, th.name { text-align: left; font-weight: 600; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .callout { border-radius: 10px; padding: 14px 16px; margin: 16px 0; font-size: 14px; }
+  .callout.good { background: var(--good-soft); border-left: 4px solid var(--good); }
+  .callout.warn { background: var(--warn-soft); border-left: 4px solid var(--warn); }
+  .callout.info { background: var(--accent-soft); border-left: 4px solid var(--accent); }
+  .hl-good { color: var(--good); font-weight: 700; }
+  .hl-bad { color: var(--bad); font-weight: 700; }
+  .muted { color: var(--muted); font-size: 13px; }
+  ol li, ul li { margin: 8px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>第 10 周：接入真实 LLM（RAG 答案生成）并清理 reranker</h1>
+  <p><span class="tag">同学</span><span class="tag">RAG 生产闭环</span><span class="tag">多模型选型</span></p>
+  <p style="margin-top:10px">把 RAG 从「离线 Fake」推进到「真实 LLM 回答」，并从 reranker 列表永久移除视觉语言模型 <code>Qwen/Qwen3-VL-Reranker-8B</code>。</p>
+</header>
+
+<section>
+  <h2>一、任务背景</h2>
+  <p>你提供了 5 个候选 LLM（火山 3 个 + 硅基 2 个），要求从中<strong>选合适的</strong>接入 RAG 答案生成与阅读洞察；同时明确要求<strong>不再使用 <code>Qwen/Qwen3-VL-Reranker-8B</code></strong>。</p>
+  <p>本阶段目标：① 联网验证这批模型到底哪些可用；② 选一个作为默认 RAG LLM 并落配置；③ 把 LLM 纳入既有的「模型注册表」范式（与 embedding / reranker 一致），便于后续多模型对比；④ 干净地移除 VL reranker。</p>
+  <div class="callout info">为什么沿用注册表范式？第 9 周已经把 embedding / reranker 做成「短名 → 客户端」的注册表 + smoke 可达过滤。LLM 是同一条路：<code>smoke_llms.py</code> 记录可达性，<code>get_reachable_llm_specs()</code> 自动跳过不可达模型，代码与密钥彻底解耦。</div>
+</section>
+
+<section>
+  <h2>二、候选清单与联网 smoke</h2>
+  <p><code>scripts/smoke_llms.py</code> 对每个候选发一个中文学术 prompt（解释 RAG 为何减少幻觉），确认密钥有效、<code>chat/completions</code> 可用，并记录延迟与响应片段。密钥只从环境变量读、<strong>不落盘</strong>。</p>
+  <table>
+    <thead>
+      <tr><th class="name">候选模型</th><th>Provider</th><th>状态</th><th>首响延迟</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="name"><code>glm-4-7-251222</code></td><td>火山</td><td class="hl-bad">❌ 404</td><td>0.6s</td><td>模型名正确，但该 key 未开通推理</td></tr>
+      <tr><td class="name"><code>doubao-seed-2-0-lite-260428</code></td><td>火山</td><td class="hl-good">✅</td><td>18.7s</td><td>首次冷启动，正常调用更快</td></tr>
+      <tr><td class="name"><code>deepseek-v4-flash-260425</code></td><td>火山</td><td class="hl-good">✅</td><td>3.1s</td><td>延迟最低，deepseek 中文强</td></tr>
+      <tr><td class="name"><code>deepseek-ai/DeepSeek-V3.2</code></td><td>硅基</td><td class="hl-good">✅</td><td>4.6s</td><td>质量档备选</td></tr>
+      <tr><td class="name"><code>Qwen/Qwen3.5-35B-A3B</code></td><td>硅基</td><td class="hl-good">✅</td><td>15.7s</td><td>质量档备选</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">结果：<strong>4 / 5 可达</strong>。硅基新 key 与旧 embedding key 是两个不同 token，均已验证可用，互不干扰。</p>
+</section>
+
+<section>
+  <h2>三、<code>glm-4-7-251222</code> 为什么 404？</h2>
+  <p>我没有把 404 当成「模型名写错」就略过，而是拉了火山方舟模型目录核对：<code>glm-4-7-251222</code><strong>确实在目录里</strong>——名字完全正确。它返回 <code>InvalidEndpointOrModel.NotFound</code>，和第 9 周 <code>volcano-large-text-250515</code> 是同一类问题：<strong>模型存在，但当前 key 没给它开通推理权限</strong>。</p>
+  <div class="callout warn">这类 404 只能由账号侧解决（在火山控制台给该模型开通 / 创建推理接入点）。代码无需改动——它已登记进注册表，等 <code>scripts/smoke_llms.py</code> 复测返回 <code>ok</code> 后，<code>get_reachable_llm_specs()</code> 会自动把它纳入可选列表。</div>
+</section>
+
+<section>
+  <h2>四、选型决策：默认 = <code>deepseek-v4-flash-260425</code></h2>
+  <p>在 4 个可达模型里，按「RAG 中文论文问答 + 阅读洞察（严格 JSON）」的需求选默认：</p>
+  <table>
+    <thead><tr><th class="name">维度</th><th>doubao-seed-2-0-lite</th><th class="hl-good">deepseek-v4-flash（选）</th><th>DeepSeek-V3.2</th><th>Qwen3.5-35B</th></tr></thead>
+    <tbody>
+      <tr><td class="name">延迟</td><td>快（冷启慢）</td><td class="hl-good">最快 3.1s</td><td>4.6s</td><td>15.7s</td></tr>
+      <tr><td class="name">中文能力</td><td>好</td><td class="hl-good">好</td><td>很好</td><td>好</td></tr>
+      <tr><td class="name">成本</td><td class="hl-good">最低</td><td class="hl-good">低（flash）</td><td>中</td><td>中</td></tr>
+      <tr><td class="name">定位</td><td>高频快速档</td><td class="hl-good">默认均衡档</td><td>质量档</td><td>质量档</td></tr>
+    </tbody>
+  </table>
+  <div class="callout good"><strong>最终默认</strong>：火山 <code>deepseek-v4-flash-260425</code>——延迟最低、deepseek 中文强、flash 便宜，smoke 响应已准确解释「RAG 先检索再生成、依赖外部证据因此减少幻觉」。备选：<code>doubao-seed-2-0-lite</code>（更便宜更快）、<code>DeepSeek-V3.2</code> / <code>Qwen3.5-35B</code>（质量档）。</div>
+</section>
+
+<section>
+  <h2>五、配置与注册表</h2>
+  <h3>1) <code>.env</code>（密钥不进库）</h3>
+  <pre><span class="c"># 两个 LLM provider 的 key（与 embedding key 分开 provisioning）</span>
+VOLCANO_LLM_API_KEY=ark-6085ff4d-...
+SILICONFLOW_LLM_API_KEY=sk-ulkewsssluupzjjkq...
+
+<span class="c"># 默认 RAG LLM（OpenAI 兼容 chat）</span>
+LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+LLM_API_KEY=ark-6085ff4d-...
+LLM_MODEL=deepseek-v4-flash-260425</pre>
+  <h3>2) <code>model_registry.py</code> 新增 LLM 段</h3>
+  <p>与 embedding / reranker 对称：<code>LLMSpec</code> 数据类 + <code>get_llm_specs()</code>（读 <code>VOLCANO_LLM_API_KEY</code> / <code>SILICONFLOW_LLM_API_KEY</code>）+ <code>build_llm_client(spec)</code> + <code>get_reachable_llm_specs(smoke_path)</code>。切换 LLM 只需改 <code>LLM_MODEL</code> 或遍历注册表做多模型对比，无需改业务代码。</p>
+</section>
+
+<section>
+  <h2>六、移除 <code>Qwen/Qwen3-VL-Reranker-8B</code></h2>
+  <h3>为什么移除</h3>
+  <p>它是<strong>视觉语言（VL）reranker</strong>。第 9 周基准已暴露：在纯文本检索上，VL embedding（<code>qwen3vl-embed-8b</code>）R@1 暴跌到 0.241（arXiv）；对应的 VL reranker 接在纯文本检索器上增益同样不具代表性，且它本就不是为纯文本检索设计的。项目语料是纯文本论文 / 行业文档，保留它会浪费调用、干扰结论。</p>
+  <h3>改了什么</h3>
+  <ul>
+    <li><code>model_registry.py</code>：从 <code>get_reranker_specs()</code> 删除该 spec（加注释说明原因）。</li>
+    <li>清理 <code>data/rerank_cache/</code> 中该 reranker 的 7 个组合缓存文件。</li>
+    <li><code>scripts/benchmark_retrieval.py</code> 无需改动——它用 <code>get_reachable_reranker_specs()</code> 自动跟随。</li>
+  </ul>
+  <p class="muted">现在 reranker 仅剩 2 个纯文本模型：<code>qwen3-rerank-4b</code> / <code>qwen3-rerank-0.6b</code>。</p>
+</section>
+
+<section>
+  <h2>七、验证结果</h2>
+  <pre># 注册表过滤（已实跑确认）
+ALL reranker specs  : ['siliconflow-qwen3-rerank-4b', 'siliconflow-qwen3-rerank-0.6b']
+REACHABLE reranker  : ['siliconflow-qwen3-rerank-4b', 'siliconflow-qwen3-rerank-0.6b']
+ALL llm specs       : [glm-4-7, doubao-seed-2-0-lite, deepseek-v4-flash,
+                       DeepSeek-V3.2, Qwen3.5-35B]
+REACHABLE llm       : [doubao-seed-2-0-lite, deepseek-v4-flash,
+                       DeepSeek-V3.2, Qwen3.5-35B]   <span class="c"># glm-4-7 被 404 自动排除</span>
+default LLM (env)   : deepseek-v4-flash-260425</pre>
+</section>
+
+<section>
+  <h2>八、局限与下一步</h2>
+  <div class="callout warn"><strong>本阶段局限</strong>：smoke 只验证了「模型可达 + 中文响应质量 OK」，还没做<strong>端到端 RAG 答案质量基准</strong>。smoke 的 prompt 是开放式问答，不是「基于给定证据回答」，所以不能直接证明它在真实 RAG 管线里的忠实度。</div>
+  <p>下一步（生产级闭环，按优先级）：</p>
+  <ol>
+    <li><strong>真实 LLM 答案质量</strong>：接入真实 <code>LLM_*</code> 后，用 <code>scripts/evaluate_answers.py --faithfulness</code> 跑答案质量闭环（忠实度裁判），呼应第 7 周设计。</li>
+    <li><strong>reranker 主场验证</strong>：构造「自然语言问题 → 证据段落」真实问答对重跑基准——这才是 reranker 增益的验证场（已知项检索低估其价值）。</li>
+    <li><strong>多 LLM 对比</strong>：用新加的 LLM 注册表，对同一个证据集对比 4 个可达 LLM 的回答质量 / 延迟 / 成本，形成可写进简历的「模型选型报告」。</li>
+  </ol>
+  <p class="muted">离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据；真实 key 只在运行时通过 <code>.env</code> 注入。</p>
+</section>
+
+</div>
+</body>
+</html>

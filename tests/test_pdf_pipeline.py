@@ -278,6 +278,10 @@ def test_answer_route_requires_llm_configuration_after_indexing(client: TestClie
     monkeypatch.delenv("LLM_BASE_URL", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)
+    # Isolate from the real .env: load_local_env() re-injects these vars via
+    # os.environ.setdefault, which would otherwise defeat the delenv above.
+    monkeypatch.setattr("paper_api.llm_client.load_local_env", lambda: None)
+    monkeypatch.setattr("paper_api.answer_evaluation.load_local_env", lambda: None)
 
     response = client.post(
         f"/papers/{paper_id}/questions:answer",
@@ -320,6 +324,10 @@ def test_insight_route_requires_llm_configuration(client: TestClient, monkeypatc
     monkeypatch.delenv("LLM_BASE_URL", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)
+    # Isolate from the real .env: load_local_env() re-injects these vars via
+    # os.environ.setdefault, which would otherwise defeat the delenv above.
+    monkeypatch.setattr("paper_api.llm_client.load_local_env", lambda: None)
+    monkeypatch.setattr("paper_api.answer_evaluation.load_local_env", lambda: None)
 
     response = client.post(f"/papers/{paper_id}/insights:generate")
 
@@ -589,6 +597,10 @@ def test_answers_evaluate_route_requires_llm_configuration(client: TestClient, m
     monkeypatch.delenv("LLM_BASE_URL", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)
+    # Isolate from the real .env: load_local_env() re-injects these vars via
+    # os.environ.setdefault, which would otherwise defeat the delenv above.
+    monkeypatch.setattr("paper_api.llm_client.load_local_env", lambda: None)
+    monkeypatch.setattr("paper_api.answer_evaluation.load_local_env", lambda: None)
 
     response = client.post(
         f"/papers/{paper_id}/answers:evaluate",
@@ -625,6 +637,10 @@ def test_faithfulness_judge_from_environment_requires_llm(monkeypatch: pytest.Mo
     monkeypatch.delenv("LLM_BASE_URL", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)
+    # Isolate from the real .env: load_local_env() re-injects these vars via
+    # os.environ.setdefault, which would otherwise defeat the delenv above.
+    monkeypatch.setattr("paper_api.llm_client.load_local_env", lambda: None)
+    monkeypatch.setattr("paper_api.answer_evaluation.load_local_env", lambda: None)
 
     with pytest.raises(LLMNotConfiguredForJudgingError):
         OpenAICompatibleFaithfulnessJudge.from_environment()

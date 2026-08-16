@@ -308,6 +308,7 @@ python -m pytest -q
 - [第 8 周：本地基线 vs 火山语义向量 检索对比实验报告](docs/tutorials/week-08-embedding-experiment.html)
 - [第 9 周：多模型注册表与 reranker 客户端教程](docs/tutorials/week-09-multimodel-reranker.html)
 - [第 9 周：129 篇真实语料检索基准（6 检索器 × 3 reranker）教程](docs/tutorials/week-09-retrieval-benchmark.html)
+- [第 10 周：接入真实 LLM（RAG 答案生成）与清理 reranker 教程](docs/tutorials/week-10-llm-selection.html)
 
 也可以检查所有 Python 文件是否能编译：
 
@@ -364,6 +365,8 @@ python -m compileall -q scripts src tests
 
 ## 下一步
 
-第 8 周已完成真实 Embedding 接入、检索质量对比实验，并建成 138 篇真实公开评测语料库（详见 `docs/tutorials/week-08-embedding-experiment.html` 与 `data/corpus/README.md`）。第 9 周已落地 `Reranker` 协议 + `SiliconFlowReranker` 客户端、`model_registry.py` 多模型登记、`scripts/smoke_models.py` 联网冒烟（8/9 模型可达；火山 `doubao-embedding-large-text-250515` 因 `Retiring`/未开通而 404，已记录并修复错误透出），并完成了**语料级检索基准**：`src/paper_api/corpus.py`（文本抽取）、`retrieval.py` 的 `BM25Retriever`、`ir_metrics.py`（Recall@K/MRR/nDCG@K）、`scripts/benchmark_retrieval.py`。在 129 篇真实文档（arXiv 79 + 行业 50）上对比 6 个基础检索器 × 3 个 reranker，**全部 18 个组合 errors=0**。关键结论：bge-m3 / qwen3-embed-0.6b 文本检索最强（R@1 0.953 / 0.922）；VL-embedding（qwen3vl-embed-8b）不适合纯文本检索（arXiv R@1 仅 0.241）；reranker 的真正价值是救回弱召回（local-hashing 0.333→0.86、qwen3vl-embed 0.426→0.89），接在强检索器后几乎无增益甚至轻微负向。详见 `docs/tutorials/week-09-multimodel-reranker.html` 与 `docs/tutorials/week-09-retrieval-benchmark.html`。
+第 8 周已完成真实 Embedding 接入、检索质量对比实验，并建成 138 篇真实公开评测语料库（详见 `docs/tutorials/week-08-embedding-experiment.html` 与 `data/corpus/README.md`）。第 9 周已落地 `Reranker` 协议 + `SiliconFlowReranker` 客户端、`model_registry.py` 多模型登记、`scripts/smoke_models.py` 联网冒烟（8/9 模型可达；火山 `doubao-embedding-large-text-250515` 因 `Retiring`/未开通而 404，已记录并修复错误透出），并完成了**语料级检索基准**：`src/paper_api/corpus.py`（文本抽取）、`retrieval.py` 的 `BM25Retriever`、`ir_metrics.py`（Recall@K/MRR/nDCG@K）、`scripts/benchmark_retrieval.py`。在 129 篇真实文档（arXiv 79 + 行业 50）上对比 6 个基础检索器 × 2 个纯文本 reranker（VL-Reranker-8B 已移除），**全部 12 个组合 errors=0**。关键结论：bge-m3 / qwen3-embed-0.6b 文本检索最强（R@1 0.953 / 0.922）；VL-embedding（qwen3vl-embed-8b）不适合纯文本检索（arXiv R@1 仅 0.241）；reranker 的真正价值是救回弱召回（local-hashing 0.333→0.86、qwen3vl-embed 0.426→0.89），接在强检索器后几乎无增益甚至轻微负向。详见 `docs/tutorials/week-09-multimodel-reranker.html` 与 `docs/tutorials/week-09-retrieval-benchmark.html`。
 
-下一步（生产级闭环）：① 构造「自然语言问题→证据段落」真实问答对重跑基准，才是 reranker 的主场（已知项检索低估其价值）；② 接入真实 `LLM_*` 用 `scripts/evaluate_answers.py --faithfulness` 跑答案质量闭环；③ 对 embedding 维度、reranker 候选数、chunk 大小做消融。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
+第 10 周已接入真实 LLM：联网 smoke 5 个候选（火山 glm-4-7 / doubao-seed-2-0-lite / deepseek-v4-flash、硅基 DeepSeek-V3.2 / Qwen3.5-35B），4/5 可达（glm-4-7 因该 key 未开通推理而 404，已登记等待开通）；默认 RAG LLM 设为火山 `deepseek-v4-flash-260425`，并在 `model_registry.py` 新增 LLM 注册表（与 embedding/reranker 对称）。同时永久移除 `Qwen/Qwen3-VL-Reranker-8B`（视觉语言 reranker 纯文本增益不具代表性），reranker 现仅剩 `qwen3-rerank-4b` / `qwen3-rerank-0.6b` 两个纯文本模型。详见 `docs/tutorials/week-10-llm-selection.html`。
+
+下一步（生产级闭环）：① 接入真实 `LLM_*` 用 `scripts/evaluate_answers.py --faithfulness` 跑答案质量闭环（忠实度裁判）；② 构造「自然语言问题→证据段落」真实问答对重跑基准，才是 reranker 的主场（已知项检索低估其价值）；③ 用 LLM 注册表对 4 个可达 LLM 做多模型答案质量/延迟/成本对比，形成模型选型报告；④ 对 embedding 维度、reranker 候选数、chunk 大小做消融。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
