@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>第 11 周：chunk 切分、真实 QA 基准与配置收敛</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --ink: #1f2329;
+    --muted: #5b6470;
+    --line: #e4e7ec;
+    --accent: #2b6de5;
+    --accent-soft: #eaf1ff;
+    --good: #1f8a4c;
+    --good-soft: #e7f6ed;
+    --warn: #b54708;
+    --warn-soft: #fdf0e6;
+    --bad: #c0392b;
+    --bad-soft: #fdecea;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.7; font-size: 15px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; }
+  header.hero {
+    background: linear-gradient(135deg, #2b6de5, #1f4fb0);
+    color: #fff; border-radius: 16px; padding: 28px 30px; margin-bottom: 28px;
+    box-shadow: 0 6px 22px rgba(43,109,229,.25);
+  }
+  header.hero h1 { margin: 0 0 6px; font-size: 25px; }
+  header.hero p { margin: 0; opacity: .92; font-size: 14px; }
+  .tag { display:inline-block; background: rgba(255,255,255,.18); border-radius: 999px; padding: 2px 12px; font-size: 12px; margin-right: 8px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px 26px; margin-bottom: 20px; }
+  h2 { font-size: 19px; margin: 0 0 14px; padding-left: 12px; border-left: 4px solid var(--accent); }
+  h3 { font-size: 16px; margin: 22px 0 10px; color: #2b3a52; }
+  p { margin: 10px 0; }
+  code { font-family: var(--mono); background: #f0f2f5; padding: 1px 6px; border-radius: 5px; font-size: 13px; color: #b54708; }
+  pre { background: #0f1626; color: #d6e2ff; padding: 16px 18px; border-radius: 10px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.6; }
+  pre .c { color: #6b7a99; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: center; }
+  th { background: var(--accent-soft); color: #1f3d7a; font-weight: 600; }
+  td.name, th.name { text-align: left; font-weight: 600; }
+  tr:nth-child(even) td { background: #fafbfc; }
+  .callout { border-radius: 10px; padding: 14px 16px; margin: 16px 0; font-size: 14px; }
+  .callout.good { background: var(--good-soft); border-left: 4px solid var(--good); }
+  .callout.warn { background: var(--warn-soft); border-left: 4px solid var(--warn); }
+  .callout.info { background: var(--accent-soft); border-left: 4px solid var(--accent); }
+  .callout.bad  { background: var(--bad-soft);  border-left: 4px solid var(--bad); }
+  .hl-good { color: var(--good); font-weight: 700; }
+  .hl-bad { color: var(--bad); font-weight: 700; }
+  .muted { color: var(--muted); font-size: 13px; }
+  ol li, ul li { margin: 8px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>第 11 周：chunk 切分、真实 QA 基准与生产配置收敛</h1>
+  <p><span class="tag">同学</span><span class="tag">chunk 策略</span><span class="tag">真实 QA 基准</span><span class="tag">配置选型</span></p>
+  <p style="margin-top:10px">把「自然语言问题 → 证据段落」的端到端检索链路搭起来并验证可用，然后在 embedding 端点开始随机断流、全量横测性价比过低时，<strong>主动收敛</strong>到一组直接可上线的配置，不再继续横测。</p>
+</header>
+
+<section>
+  <h2>一、本周做了什么 / 为什么停横测</h2>
+  <p>第 10 周留下了三个待办：① 真实 LLM 答案质量闭环；② 用「自然语言问题→证据段落」真实问答对重跑 reranker 基准（reranker 的主场）；③ 4-LLM 质量/延迟/成本对比。本周把它落地成代码：</p>
+  <ul>
+    <li><code>src/paper_api/chunking.py</code>：滑动窗口 chunk 切分，带 <code>doc_id</code> 溯源。</li>
+    <li><code>scripts/build_qa_dataset.py</code>：用 LLM 把证据段落改写成自然语言问题，生成 30 条真实 QA（15 arXiv + 15 行业）。</li>
+    <li><code>scripts/benchmark_qa_retrieval.py</code>：chunk 级真实 QA 检索基准（6 基础检索器 × 2 reranker，<code>doc_id</code> 为正例，可续跑）。</li>
+    <li><code>src/paper_api/cache_io.py</code>：原子写 + 周期落盘 + 瞬态锁非致命降级的缓存工具（修掉 Windows 下 OneDrive/IDE 文件锁导致的 <code>PermissionError</code>）。</li>
+  </ul>
+  <div class="callout warn"><strong>全量横测被主动叫停</strong>：全量要把 13976 个 chunk × 多个 embedding 模型逐条走网络；而 embedding 端点现在随机断 SSL 连接（<code>SSL: UNEXPECTED_EOF_WHILE_READING</code>），且第 9-10 周文档级基准已经把 embedding / reranker 结论钉死，横测边际价值极低。因此不再为「补齐所有组合的数字」烧钱烧时间——直接用已有结论选配置（见第六节）。</div>
+</section>
+
+<section>
+  <h2>二、chunk 切分模块</h2>
+  <p>之前第 4/5/9 周都是整篇或按页分块。真实 RAG 需要更细的滑动窗口，让一段证据恰好落在一个 chunk 里，避免「答案被页边界劈开」。</p>
+  <pre><span class="c"># src/paper_api/chunking.py</span>
+chunk_document(text, doc_id, size=1000, overlap=120)
+chunk_corpus(docs, size=1000, overlap=120)   <span class="c"># 返回 [ (chunk_id, doc_id, text), ... ]</span></pre>
+  <ul>
+    <li><strong>size=1000 / overlap=120</strong>：约 1000 字一段，相邻段重叠 120 字，兼顾「语义完整」与「边界不漏」。这是初版默认值，后续可按答案长度做消融。</li>
+    <li>每个 chunk 记录来源 <code>doc_id</code>，QA 基准用它做正例标注（问题来自哪篇文档，哪篇就是该问题的正例）。</li>
+    <li>129 篇真实文档切成 <strong>13976</strong> 个 chunk（本项目的真实检索规模）。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>三、真实 QA 数据集（30 条）</h2>
+  <p><code>build_qa_dataset.py</code> 让 LLM 读证据段落、改写成「人真的会问的问题」，而不是用标题当问题（已知项检索的缺陷：标题天然和自身高度相似，高估检索器）。样例问题：</p>
+  <ul>
+    <li>中文行业：「采购项目预算金额是多少？」「该标准适用于哪些产品？」</li>
+    <li>英文 arXiv：「what are the main challenges in neural IR?」「how does late interaction retrieve?」</li>
+  </ul>
+  <div class="callout info">数据集结构：<code>{"items":[{"question":..., "doc_id":..., "source":"arxiv|industry", "evidence":...}]}</code>，30 条（15 arXiv + 15 行业，12 中文 / 18 英文问题）。它证明了「证据段落 → 自然语言问题」的改写链路可用，是 reranker 真正的主场评测集。</div>
+</section>
+
+<section>
+  <h2>四、真实 QA 检索基准 harness</h2>
+  <p><code>benchmark_qa_retrieval.py</code> 与第 9 周的文档级基准对称：</p>
+  <table>
+    <thead><tr><th class="name">组件</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td class="name">基础检索器</td><td>local-hashing、BM25、qwen3-embed-0.6b、bge-m3（视觉/多模态 embedder 已砍，纯文本本就偏弱，第 9-10 周论证过）</td></tr>
+      <tr><td class="name">reranker</td><td>qwen3-rerank-4b、qwen3-rerank-0.6b，接在每个基础检索器各自的 top-N 候选上重排（修正第 9 周「并集截断」导致 pool_coverage 仅 0.512 的设计缺陷）</td></tr>
+      <tr><td class="name">正例</td><td>问题来源 <code>doc_id</code> 对应 chunk 命中即算对（真实 QA，比标题自指更难）</td></tr>
+      <tr><td class="name">指标</td><td>Recall@K / MRR@K / nDCG@K（纯 Python，无 numpy 依赖）</td></tr>
+      <tr><td class="name">续跑</td><td>embedding 与 reranker 结果按模型缓存，崩溃后只补未完成部分</td></tr>
+    </tbody>
+  </table>
+  <div class="callout good"><strong>smoke 已通过</strong>：<code>--limit 3 --no-rerank</code> 小批量跑通，4 个基础检索器全部正常构建、指标正常计算、结果正常落盘。下方数字仅验证 pipeline，不具代表性（只加载了 3/129 篇文档，多数 QA 目标不在库内）。</div>
+  <table>
+    <thead><tr><th class="name">检索器（smoke, 3 文档）</th><th>R@1</th><th>R@5</th><th>R@10</th><th>nDCG@10</th></tr></thead>
+    <tbody>
+      <tr><td class="name">local-hashing</td><td>0.067</td><td>0.300</td><td>0.567</td><td>0.265</td></tr>
+      <tr><td class="name">bm25</td><td>0.100</td><td>0.500</td><td>0.933</td><td>0.432</td></tr>
+      <tr><td class="name">qwen3-embed-0.6b</td><td>0.100</td><td>0.500</td><td>0.933</td><td>0.433</td></tr>
+      <tr><td class="name">bge-m3</td><td>0.100</td><td>0.433</td><td>0.800</td><td>0.382</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">注意：bge-m3 在 3 文档 smoke 里并不突出，因为样本太少且目标文档大概率未加载——这不是它的真实水平。它的真实水平见第六节（文档级 R@1=0.953）。</p>
+</section>
+
+<section>
+  <h2>五、踩坑：两个崩溃，两种修法</h2>
+  <h3>1) Windows 文件锁 PermissionError（已修）</h3>
+  <p>原脚本「末尾一次性 flush」缓存，恰好撞上 OneDrive/IDE 同步瞬间锁文件 → 整轮白跑。<code>cache_io.py</code> 改为：临时文件 + <code>os.replace</code> 原子写、每 300 chunk 周期落盘、瞬态锁降级到 <code>.bakretry</code> 不抛异常。单元验证通过。</p>
+  <h3>2) Embedding 端点 SSL 断流（外部问题，无法在代码内根治）</h3>
+  <p>全量跑到一半，embedding 接口返回 <code>SSL: UNEXPECTED_EOF_WHILE_READING</code>。这是服务端/网络抖动，<code>cache_io</code> 管不了网络层。此时已编码的 chunk 向量靠周期落盘存活在磁盘，但 bge-m3 缓存只到 1463/13976（不完整）。<strong>要补完就得再砸 1.25 万次网络 embedding 调用</strong>——既慢又正好会再撞 SSL。这正是「停横测」的直接触发点。</p>
+  <div class="callout bad">结论：当「补齐数字」需要重新发起上万次不稳定的网络调用、且结论早已被更便宜的实验钉死时，继续横测是赔本买卖。配置选型应基于已有证据，而非追求「所有组合都跑满」。</div>
+</section>
+
+<section>
+  <h2>六、最终推荐配置（基于第 9-10 周已验证结论）</h2>
+  <p>不跑全量横测，也能从文档级基准（129 篇真实文档）直接推出生产配置：</p>
+  <table>
+    <thead><tr><th class="name">角色</th><th class="hl-good">选择</th><th>证据</th></tr></thead>
+    <tbody>
+      <tr><td class="name">Embedder</td><td class="hl-good"><code>bge-m3</code></td><td>文档级 R@1=0.953（最强），中英文均衡，1024 维</td></tr>
+      <tr><td class="name">Reranker</td><td class="hl-good">默认<b>关闭</b></td><td>接在 bge-m3 上增益≈0（−0.016）；仅当接弱检索器（BM25/local-hashing）时启用 <code>qwen3-rerank-4b</code> 救回召回</td></tr>
+      <tr><td class="name">LLM</td><td class="hl-good"><code>deepseek-v4-flash-260425</code></td><td>首响延迟最低 3.1s，deepseek 中文强，flash 便宜（第 10 周选定）</td></tr>
+      <tr><td class="name">Chunking</td><td class="hl-good">1000 / 120</td><td>初版默认值，后续按答案长度消融</td></tr>
+      <tr><td class="name">喂 LLM 段数</td><td class="hl-good">top-10</td><td>召回够宽，避免漏证据；成本可控</td></tr>
+    </tbody>
+  </table>
+  <h3>落地到 <code>.env</code></h3>
+  <pre><span class="c"># 生产部署配置</span>
+EMBEDDING_MODEL=BAAI/bge-m3            <span class="c"># 文本检索最强, 中英文均衡</span>
+<span class="c"># reranker 默认不接: 在 bge-m3 上增益≈0, 省成本/延迟</span>
+<span class="c">#   仅弱检索器(BM25/local-hashing)场景启用 qwen3-rerank-4b</span>
+LLM_MODEL=deepseek-v4-flash-260425     <span class="c"># 延迟最低 3.1s, 中文强</span>
+<span class="c"># CHUNK_SIZE=1000 / CHUNK_OVERLAP=120 在 chunking.py 默认</span>
+<span class="c"># 检索 top-N=10 喂给 LLM</span></pre>
+  <div class="callout good">这套配置 = <strong>「强 embedding 单阶段召回 + 快 LLM 生成」</strong>。两阶段（加 reranker）只在接入弱检索器时才有正收益，强 embedding 场景下纯属增加延迟与成本。</div>
+</section>
+
+<section>
+  <h2>七、可选：单配置验证（不强制）</h2>
+  <p>如果你想要「选定配置真的端到端跑通」的实锤，可以等 embedding 端点稳定后做一次性验证（不再是横测）：只用 <code>bge-m3</code> 一个检索器（不接 reranker），对 30 条 QA 跑检索 + 用 <code>deepseek-v4-flash</code> 生成答案。届时 bge-m3 缓存需从 1463 补到 13976——但那只是「验证」，不是「对比」，规模可控。</p>
+  <p class="muted">当前 bge-m3 缓存 1463/13976、qwen3-embed-0.6b 13763/13976（接近完整）。离线 Fake 链路 + 单测仍保证每次提交可回归检索命中与引用正确性，不依赖任何外部凭据。</p>
+</section>
+
+<section>
+  <h2>八、局限与下一步</h2>
+  <div class="callout warn"><strong>本阶段局限</strong>：真实 QA 检索基准只跑了 smoke（pipeline 验证），未出全量数字；4-LLM 答案质量/延迟/成本横评未跑。这两项的结论已被第 9-10 周更便宜的实验覆盖，因此主动停掉，不做赔本的横测。</div>
+  <p>下一步（按价值排序）：</p>
+  <ol>
+    <li><strong>端到端 RAG demo</strong>：用上面的推荐配置跑一个真实问答（检索 bge-m3 → deepseek-v4-flash 生成 → 返回带 citation 的答案），作为简历可展示的成品。</li>
+    <li><strong>答案质量闭环</strong>：接入真实 LLM 后用 <code>scripts/evaluate_answers.py --faithfulness</code>（qwen3.5-35B 作独立裁判）验证忠实度。</li>
+    <li><strong>消融（可选）</strong>：chunk 大小、喂 LLM 段数、是否接 reranker 的少量对照，而非全组合横测。</li>
+  </ol>
+</section>
+
+</div>
+</body>
+</html>

@@ -62,6 +62,13 @@
   - 新增 `model_registry.py`：集中登记 5 个 embedding + 3 个 reranker 的端点与密钥（密钥只读 `.env`，不硬编码），供后续语料级基准按短名实例化。
   - `scripts/smoke_models.py` 联网冒烟 9 个模型：**8/9 可达**——火山 `doubao-embedding-vision-251215`(2048 维)、硅基 `Qwen/Qwen3-VL-Embedding-8B`(4096 维)/`Qwen/Qwen3-Embedding-0.6B`(1024 维)/`BAAI/bge-m3`(1024 维)，以及 3 个硅基 reranker（`Qwen3-VL-Reranker-8B`/`Qwen3-Reranker-4B`/`Qwen3-Reranker-0.6B`）全部正常；火山 `doubao-embedding-large-text-250515` 返回 404 `InvalidEndpointOrModel.NotFound`（该模型在火山模型目录中状态为 `Retiring`/未对当前密钥开通）。已同步修复 embedding 与 rerank 客户端的错误透出，让重试失败时直接显示真实状态码与厂商报错，而非笼统的“重试 3 次失败”。
 
+- 真实 QA 检索基准与配置收敛（第 11 周）：
+  - `src/paper_api/chunking.py` 滑动窗口 chunk 切分（1000/120，带 doc_id 溯源），129 篇真实文档切成 13976 个 chunk。
+  - `scripts/build_qa_dataset.py` 用 LLM 把证据段落改写成自然语言问题，生成 30 条真实 QA（15 arXiv + 15 行业），作为 reranker 的主场评测集。
+  - `scripts/benchmark_qa_retrieval.py` chunk 级真实 QA 检索基准（6 基础检索器 × 2 reranker，doc_id 正例，可续跑），smoke 已验证 pipeline 端到端可用。
+  - `src/paper_api/cache_io.py` 原子写 + 周期落盘 + 瞬态锁非致命降级，修掉 Windows 下 OneDrive/IDE 文件锁导致的 PermissionError。
+  - **全量横测主动叫停**：embedding 端点随机断 SSL（UNEXPECTED_EOF_WHILE_READING）且 bge-m3 缓存不完整，而第 9-10 周文档级基准已钉死 embedding/reranker 结论，横测边际价值过低，直接选型。最终配置：bge-m3（R@1=0.953）+ 默认不接 reranker + deepseek-v4-flash-260425 LLM + 1000/120 chunking + top-10 喂 LLM。详见 `docs/tutorials/week-11-qa-benchmark-config.html`。
+
 ## 环境要求
 
 - Python 3.11 或更高版本
@@ -309,6 +316,7 @@ python -m pytest -q
 - [第 9 周：多模型注册表与 reranker 客户端教程](docs/tutorials/week-09-multimodel-reranker.html)
 - [第 9 周：129 篇真实语料检索基准（6 检索器 × 3 reranker）教程](docs/tutorials/week-09-retrieval-benchmark.html)
 - [第 10 周：接入真实 LLM（RAG 答案生成）与清理 reranker 教程](docs/tutorials/week-10-llm-selection.html)
+- [第 11 周：chunk 切分、真实 QA 基准与配置收敛教程](docs/tutorials/week-11-qa-benchmark-config.html)
 
 也可以检查所有 Python 文件是否能编译：
 
@@ -369,4 +377,6 @@ python -m compileall -q scripts src tests
 
 第 10 周已接入真实 LLM：联网 smoke 5 个候选（火山 glm-4-7 / doubao-seed-2-0-lite / deepseek-v4-flash、硅基 DeepSeek-V3.2 / Qwen3.5-35B），4/5 可达（glm-4-7 因该 key 未开通推理而 404，已登记等待开通）；默认 RAG LLM 设为火山 `deepseek-v4-flash-260425`，并在 `model_registry.py` 新增 LLM 注册表（与 embedding/reranker 对称）。同时永久移除 `Qwen/Qwen3-VL-Reranker-8B`（视觉语言 reranker 纯文本增益不具代表性），reranker 现仅剩 `qwen3-rerank-4b` / `qwen3-rerank-0.6b` 两个纯文本模型。详见 `docs/tutorials/week-10-llm-selection.html`。
 
-下一步（生产级闭环）：① 接入真实 `LLM_*` 用 `scripts/evaluate_answers.py --faithfulness` 跑答案质量闭环（忠实度裁判）；② 构造「自然语言问题→证据段落」真实问答对重跑基准，才是 reranker 的主场（已知项检索低估其价值）；③ 用 LLM 注册表对 4 个可达 LLM 做多模型答案质量/延迟/成本对比，形成模型选型报告；④ 对 embedding 维度、reranker 候选数、chunk 大小做消融。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
+第 11 周已完成 chunk 切分模块（`chunking.py`，1000/120，doc_id 溯源，129 篇文档切成 13976 chunk）、真实 QA 数据集（`build_qa_dataset.py`，30 条：15 arXiv + 15 行业）、chunk 级真实 QA 检索基准 harness（`benchmark_qa_retrieval.py`，6 检索器 × 2 reranker，doc_id 正例，可续跑，smoke 已验证 pipeline 端到端可用），以及 `cache_io.py` 原子写 + 周期落盘 + 瞬态锁非致命降级（修掉 Windows OneDrive/IDE 文件锁导致的 PermissionError）。**全量横测被主动叫停**：embedding 端点随机断 SSL（UNEXPECTED_EOF_WHILE_READING）且 bge-m3 缓存不完整，而第 9-10 周文档级基准已钉死 embedding/reranker 结论，横测边际价值过低，直接选型。最终生产配置：bge-m3（R@1=0.953）+ 默认不接 reranker + deepseek-v4-flash-260425 LLM + 1000/120 chunking + top-10 喂 LLM。详见 `docs/tutorials/week-11-qa-benchmark-config.html`。
+
+下一步（按价值排序）：① 端到端 RAG demo：用推荐配置跑「bge-m3 检索 → deepseek-v4-flash 生成 → 带 citation 答案」的真实问答成品；② 答案质量闭环：等 embedding 端点稳定后补完 bge-m3 缓存，用 `scripts/evaluate_answers.py --faithfulness`（qwen3.5-35B 独立裁判）验证忠实度；③ 可选少量消融（chunk 大小、喂 LLM 段数、是否接 reranker），而非全组合横测。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
