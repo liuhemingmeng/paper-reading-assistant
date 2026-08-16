@@ -69,6 +69,10 @@
   - `src/paper_api/cache_io.py` 原子写 + 周期落盘 + 瞬态锁非致命降级，修掉 Windows 下 OneDrive/IDE 文件锁导致的 PermissionError。
   - **全量横测主动叫停**：embedding 端点随机断 SSL（UNEXPECTED_EOF_WHILE_READING）且 bge-m3 缓存不完整，而第 9-10 周文档级基准已钉死 embedding/reranker 结论，横测边际价值过低，直接选型。最终配置：bge-m3（R@1=0.953）+ 默认不接 reranker + deepseek-v4-flash-260425 LLM + 1000/120 chunking + top-10 喂 LLM。详见 `docs/tutorials/week-11-qa-benchmark-config.html`。
 
+- 端到端 RAG demo 与部署就绪（第 12 周）：
+  - `scripts/run_rag_demo.py` 用选定配置（bge-m3 检索 + deepseek-v4-flash 生成，1000/120，top-10）跑通端到端 RAG：加载 QA 子集文档 → bge-m3 可续跑缓存 embed → top-10 余弦检索 → LLM 生成带 citation 答案；demo 中 top1 命中即问题来源文档、答案基于证据准确。
+  - `docs/tutorials/week-12-deployment-readiness.html` 部署就绪路线：当前是本地原型、能上云，但需补 P0/P1/P2 八块（生产进程 / Docker / 密钥管理 / 向量库 / 鉴权 / 限流 / 前端 / 可观测 / CI-CD）；给出云服务器最小部署 8 步与 Dockerfile 骨架，向量库持久化（pgvector）列为上生产第一基石。
+
 ## 环境要求
 
 - Python 3.11 或更高版本
@@ -317,6 +321,7 @@ python -m pytest -q
 - [第 9 周：129 篇真实语料检索基准（6 检索器 × 3 reranker）教程](docs/tutorials/week-09-retrieval-benchmark.html)
 - [第 10 周：接入真实 LLM（RAG 答案生成）与清理 reranker 教程](docs/tutorials/week-10-llm-selection.html)
 - [第 11 周：chunk 切分、真实 QA 基准与配置收敛教程](docs/tutorials/week-11-qa-benchmark-config.html)
+- [第 12 周：端到端 RAG demo 与部署就绪路线教程](docs/tutorials/week-12-deployment-readiness.html)
 
 也可以检查所有 Python 文件是否能编译：
 
@@ -379,4 +384,6 @@ python -m compileall -q scripts src tests
 
 第 11 周已完成 chunk 切分模块（`chunking.py`，1000/120，doc_id 溯源，129 篇文档切成 13976 chunk）、真实 QA 数据集（`build_qa_dataset.py`，30 条：15 arXiv + 15 行业）、chunk 级真实 QA 检索基准 harness（`benchmark_qa_retrieval.py`，6 检索器 × 2 reranker，doc_id 正例，可续跑，smoke 已验证 pipeline 端到端可用），以及 `cache_io.py` 原子写 + 周期落盘 + 瞬态锁非致命降级（修掉 Windows OneDrive/IDE 文件锁导致的 PermissionError）。**全量横测被主动叫停**：embedding 端点随机断 SSL（UNEXPECTED_EOF_WHILE_READING）且 bge-m3 缓存不完整，而第 9-10 周文档级基准已钉死 embedding/reranker 结论，横测边际价值过低，直接选型。最终生产配置：bge-m3（R@1=0.953）+ 默认不接 reranker + deepseek-v4-flash-260425 LLM + 1000/120 chunking + top-10 喂 LLM。详见 `docs/tutorials/week-11-qa-benchmark-config.html`。
 
-下一步（按价值排序）：① 端到端 RAG demo：用推荐配置跑「bge-m3 检索 → deepseek-v4-flash 生成 → 带 citation 答案」的真实问答成品；② 答案质量闭环：等 embedding 端点稳定后补完 bge-m3 缓存，用 `scripts/evaluate_answers.py --faithfulness`（qwen3.5-35B 独立裁判）验证忠实度；③ 可选少量消融（chunk 大小、喂 LLM 段数、是否接 reranker），而非全组合横测。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
+第 12 周已用选定配置跑通端到端 RAG demo（`scripts/run_rag_demo.py`：加载 QA 子集文档 → bge-m3 可续跑缓存 embed → top-10 余弦检索 → deepseek-v4-flash 生成带 citation 答案；demo 中 top1 命中即问题来源文档、答案基于证据准确），并产出部署就绪教程（`docs/tutorials/week-12-deployment-readiness.html`）：当前是本地原型、能上云，但需补 P0/P1/P2 八块（生产进程 / Docker / 密钥管理 / 向量库 / 鉴权 / 限流 / 前端 / 可观测 / CI-CD），并给出云服务器最小部署 8 步与 Dockerfile 骨架，把向量库持久化（pgvector）列为上生产第一基石。
+
+下一步（按价值排序）：① 向量库持久化（pgvector）——去掉「每次启动重算全库」，是上生产的第一块基石；② Dockerfile + gunicorn 生产进程；③ 最小前端 UI（能发问题、显示答案 + citation）；④ 鉴权 + 限流（对外开放前的硬门槛）；⑤ 买一台轻量云服务器，按 8 步部署即真正「上线」。所有外部模型调用走标准 OpenAI 兼容协议，换厂商/自托管只改注册表与 `.env`，业务代码不动。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
