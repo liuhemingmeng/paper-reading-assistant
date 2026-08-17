@@ -27,6 +27,7 @@ from .answer_evaluation import (
 )
 from .auth import verify_api_key
 from .embeddings import EmbeddingConfigurationError, EmbeddingResponseError, get_default_embedder
+from .rerank import RerankConfigurationError, RerankResponseError, SiliconFlowReranker
 from .settings import write_env_values
 from .evaluation import EvaluationCase, evaluate_retrieval
 from .llm_client import LLMConfigurationError, LLMResponseError, OpenAICompatibleClient
@@ -73,6 +74,32 @@ from .services import (
     save_processed_document,
     update_paper,
 )
+
+
+def _maybe_rerank(
+    query: str, results: list[tuple[PaperChunk, float]]
+) -> list[tuple[PaperChunk, float]]:
+    """Reorder retrieval hits with a cross-encoder reranker when enabled.
+
+    Gated by ``RERANKER_ENABLED`` (set to 1/true/yes). When disabled or the
+    reranker is misconfigured the original embedding ranking is returned
+    unchanged, so the default demo path never depends on the reranker.
+    """
+    flag = os.getenv("RERANKER_ENABLED", "").strip().lower()
+    if flag not in ("1", "true", "yes") or not results:
+        return results
+    try:
+        model = os.getenv("RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B").strip() or "Qwen/Qwen3-Reranker-0.6B"
+        reranker = SiliconFlowReranker.from_environment(model=model)
+    except (RerankConfigurationError, RerankResponseError):
+        return results
+    documents = [chunk.content for chunk, _ in results]
+    try:
+        hits = reranker.rerank(query, documents, top_n=len(results))
+    except RerankResponseError:
+        return results
+    order = {hit.index: hit.score for hit in hits}
+    return [(results[i][0], order.get(i, results[i][1])) for i in sorted(order)]
 
 
 def create_app(
@@ -204,6 +231,7 @@ def create_app(
         validate_retrieval_limit(limit)
         try:
             results = retrieve_corpus(session, query, limit=limit, embedder=app.state.embedder)
+            results = _maybe_rerank(query, results)
             chunk_ids = [chunk.id for chunk, _ in results]
             paper_map = {
                 chunk.id: paper
@@ -246,6 +274,7 @@ def create_app(
                 limit=limit,
                 embedder=app.state.embedder,
             )
+            evidence = _maybe_rerank(question, evidence)
             chunk_ids = [chunk.id for chunk, _ in evidence]
             paper_map = {
                 chunk.id: paper

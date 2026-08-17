@@ -67,7 +67,7 @@ class SiliconFlowReranker:
     def from_environment(cls, model: str | None = None) -> "SiliconFlowReranker":
         load_local_env()
         base_url = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").strip()
-        api_key = os.getenv("SILICONFLOW_API_KEY", "").strip()
+        api_key = (os.getenv("SILICONFLOW_API_KEY") or os.getenv("EMBEDDING_API_KEY") or "").strip()
         resolved_model = model or os.getenv("RERANKER_MODEL", "").strip()
         if not api_key:
             raise RerankConfigurationError("Set SILICONFLOW_API_KEY before using a SiliconFlow reranker")
