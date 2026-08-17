@@ -13,6 +13,7 @@ from .models import ChunkEmbedding, Paper, PaperChunk, PaperDocument, PaperInsig
 from .pdf_processing import ExtractedPage, TextChunk
 from .retrieval import LocalHashingEmbedder, TextEmbedder, cosine_similarity
 from .schemas import PaperCreate, PaperUpdate
+from .vector_store import ensure_vector_table, is_postgresql, replace_vectors, search_vectors
 
 
 class PaperNotFoundError(Exception):
@@ -169,7 +170,39 @@ def build_retrieval_index(
         )
     session.add_all(embeddings)
     session.commit()
+    if is_postgresql(session):
+        replace_vectors(
+            session,
+            [
+                {"chunk_id": chunk.id, "model": item.model, "vector": json.loads(item.vector_json)}
+                for chunk, item in zip(chunks, embeddings, strict=True)
+            ],
+        )
     return model, len(embeddings)
+
+
+def _rank_records(
+    records: list[tuple[PaperChunk, ChunkEmbedding]],
+    query_vector: list[float],
+    model: str,
+    limit: int,
+    scope: str,
+) -> list[tuple[PaperChunk, float]]:
+    if not records:
+        raise RetrievalNotReadyError(f"{scope} has not been indexed")
+    stored_models = {embedding.model for _, embedding in records}
+    if model not in stored_models:
+        raise RetrievalNotReadyError(
+            f"{scope} index was built with {sorted(stored_models)} but the query uses {model}; rebuild the index"
+        )
+    scored = [
+        (chunk, cosine_similarity(query_vector, json.loads(embedding.vector_json)))
+        for chunk, embedding in records
+    ]
+    ranked = sorted(scored, key=lambda item: (-item[1], item[0].sequence))[:limit]
+    if not ranked or ranked[0][1] <= 0:
+        raise NoRelevantEvidenceError(f"No relevant evidence found in {scope}")
+    return ranked
 
 
 def retrieve_chunks(
@@ -182,34 +215,49 @@ def retrieve_chunks(
     if not query.strip():
         raise ValueError("query must not be blank")
     document = get_document(session, paper_id)
+    if is_postgresql(session):
+        embedder = embedder or LocalHashingEmbedder()
+        query_embedded = embedder.embed(query)
+        ranked_ids = search_vectors(session, query_embedded.vector, query_embedded.model, limit)
+        chunks = {chunk.id: chunk for chunk in session.scalars(select(PaperChunk).where(PaperChunk.document_id == document.id))}
+        ranked = [(chunks[chunk_id], score) for chunk_id, score in ranked_ids if chunk_id in chunks]
+        if ranked:
+            return ranked
+        raise RetrievalNotReadyError(f"Paper {paper_id} has not been indexed for model {query_embedded.model}")
     embedder = embedder or LocalHashingEmbedder()
     query_embedded = embedder.embed(query)
-    query_vector = query_embedded.vector
-    statement = (
+    records = list(session.execute(
         select(PaperChunk, ChunkEmbedding)
         .join(ChunkEmbedding, ChunkEmbedding.chunk_id == PaperChunk.id)
         .where(PaperChunk.document_id == document.id)
-    )
-    records = list(session.execute(statement))
-    if not records:
-        raise RetrievalNotReadyError(f"Paper {paper_id} has not been indexed")
-
-    stored_models = {embedding.model for _, embedding in records}
-    if query_embedded.model not in stored_models:
-        raise RetrievalNotReadyError(
-            f"Paper {paper_id} index was built with {sorted(stored_models)} "
-            f"but the query uses {query_embedded.model}; rebuild the index"
-        )
+    ))
+    return _rank_records(records, query_embedded.vector, query_embedded.model, limit, f"Paper {paper_id}")
 
 
-    scored = [
-        (chunk, cosine_similarity(query_vector, json.loads(embedding.vector_json)))
-        for chunk, embedding in records
-    ]
-    ranked = sorted(scored, key=lambda item: (-item[1], item[0].sequence))[:limit]
-    if not ranked or ranked[0][1] <= 0:
-        raise NoRelevantEvidenceError(f"No relevant evidence found for paper {paper_id}")
-    return ranked
+def retrieve_corpus(
+    session: Session,
+    query: str,
+    limit: int = 3,
+    embedder: TextEmbedder | None = None,
+) -> list[tuple[PaperChunk, float]]:
+    """Retrieve evidence across every processed paper in the library."""
+    if not query.strip():
+        raise ValueError("query must not be blank")
+    embedder = embedder or LocalHashingEmbedder()
+    query_embedded = embedder.embed(query)
+    if is_postgresql(session):
+        ranked_ids = search_vectors(session, query_embedded.vector, query_embedded.model, limit)
+        if not ranked_ids:
+            raise RetrievalNotReadyError("No corpus vectors found for the configured embedding model")
+        chunks = {chunk.id: chunk for chunk in session.scalars(select(PaperChunk).where(PaperChunk.id.in_([i for i, _ in ranked_ids])))}
+        ranked = [(chunks[chunk_id], score) for chunk_id, score in ranked_ids if chunk_id in chunks]
+        if not ranked:
+            raise NoRelevantEvidenceError("No relevant evidence found in corpus")
+        return ranked
+    records = list(session.execute(
+        select(PaperChunk, ChunkEmbedding).join(ChunkEmbedding, ChunkEmbedding.chunk_id == PaperChunk.id)
+    ))
+    return _rank_records(records, query_embedded.vector, query_embedded.model, limit, "Corpus")
 
 
 def answer_question(
@@ -221,6 +269,22 @@ def answer_question(
     embedder: TextEmbedder | None = None,
 ) -> tuple[GroundedAnswer, list[tuple[PaperChunk, float]]]:
     evidence = retrieve_chunks(session, paper_id, question, limit=limit, embedder=embedder)
+    prompt_evidence = "\n\n".join(
+        f"[chunk:{chunk.id}; page:{chunk.page_number}; section:{chunk.section_title or 'unknown'}]\n{chunk.content}"
+        for chunk, _ in evidence
+    )
+    return generator.answer(question, prompt_evidence), evidence
+
+
+def answer_question_corpus(
+    session: Session,
+    question: str,
+    generator: AnswerGenerator,
+    limit: int = 3,
+    embedder: TextEmbedder | None = None,
+) -> tuple[GroundedAnswer, list[tuple[PaperChunk, float]]]:
+    """Answer a question using evidence retrieved across the whole library."""
+    evidence = retrieve_corpus(session, question, limit=limit, embedder=embedder)
     prompt_evidence = "\n\n".join(
         f"[chunk:{chunk.id}; page:{chunk.page_number}; section:{chunk.section_title or 'unknown'}]\n{chunk.content}"
         for chunk, _ in evidence

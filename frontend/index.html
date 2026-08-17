@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>论文阅读助手 · 跨库 RAG 问答</title>
+<style>
+  :root{
+    --bg:#f4f6fb; --card:#ffffff; --ink:#1f2937; --muted:#6b7280;
+    --line:#e5e7eb; --brand:#2563eb; --brand-soft:#eff6ff; --good:#047857;
+    --warn:#b45309;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.6;font-size:15px}
+  .wrap{max-width:880px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 20px;font-size:13px}
+  .bar{display:flex;gap:10px;align-items:flex-start;background:var(--card);
+    border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:16px}
+  .bar input{flex:1;border:1px solid var(--line);border-radius:8px;padding:11px 13px;font-size:15px;outline:none}
+  .bar input:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+  .bar button{border:0;background:var(--brand);color:#fff;border-radius:8px;padding:11px 22px;font-size:15px;cursor:pointer;white-space:nowrap}
+  .bar button:disabled{opacity:.6;cursor:default}
+  .apikey{display:flex;gap:10px;align-items:center;margin-bottom:14px;font-size:13px;color:var(--muted)}
+  .apikey input{flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px}
+  .mode{display:flex;gap:18px;margin-bottom:12px;font-size:13px;color:var(--muted)}
+  .mode label{display:flex;gap:6px;align-items:center;cursor:pointer}
+  .answer{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px;white-space:pre-wrap}
+  .answer.empty{color:var(--muted)}
+  .cit{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .cit h3{margin:0 0 10px;font-size:15px;color:var(--ink)}
+  .cit-item{border-left:3px solid var(--brand);padding:8px 12px;margin:8px 0;background:var(--brand-soft);border-radius:0 8px 8px 0;font-size:14px}
+  .cit-item .meta{color:var(--muted);font-size:12px;margin-bottom:4px}
+  .cit-item .src{color:var(--brand);font-weight:600}
+  .err{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:10px;padding:12px 16px;margin-bottom:16px}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--brand);border-top-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .pill{display:inline-block;font-size:11px;padding:1px 8px;border-radius:999px;background:var(--brand-soft);color:var(--brand);margin-left:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>论文阅读助手 <span class="pill">跨库 RAG</span></h1>
+  <p class="sub">向整篇论文语料库提问，答案附带可追溯的来源引用。检索用 bge-m3，生成用 deepseek-v4-flash。</p>
+
+  <div class="apikey">
+    <span>API Key</span>
+    <input id="apikey" type="password" placeholder="X-API-Key（未启用鉴权时留空）">
+  </div>
+
+  <div class="mode">
+    <label><input type="radio" name="mode" value="answer" checked> 问答（生成答案）</label>
+    <label><input type="radio" name="mode" value="search"> 仅检索证据</label>
+  </div>
+
+  <div class="bar">
+    <input id="q" type="text" placeholder="例如：neural IR 面临的主要挑战是什么？" autofocus>
+    <button id="ask" onclick="run()">提问</button>
+  </div>
+
+  <div id="err" class="err" hidden></div>
+  <div id="answer" class="answer empty">在上方输入问题，结果会显示在这里。</div>
+  <div id="cit" class="cit" hidden>
+    <h3>来源引用</h3>
+    <div id="cits"></div>
+  </div>
+</div>
+
+<script>
+const API = location.origin;
+const $ = id => document.getElementById(id);
+let busy = false;
+
+async function run(){
+  if(busy) return;
+  const q = $('q').value.trim();
+  if(!q) return;
+  busy = true;
+  const btn = $('ask');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>生成中';
+  $('err').hidden = true;
+  $('answer').className = 'answer empty';
+  $('answer').textContent = '正在检索证据并生成答案…';
+  $('cit').hidden = true;
+  const mode = document.querySelector('input[name=mode]:checked').value;
+  const key = $('apikey').value.trim();
+  const headers = {'Content-Type':'application/json'};
+  if(key) headers['X-API-Key'] = key;
+  const path = mode === 'search' ? '/corpus/search?query=' + encodeURIComponent(q) + '&limit=5' : '/corpus/questions:answer?question=' + encodeURIComponent(q) + '&limit=5';
+  const method = 'GET';
+  try{
+    const res = await fetch(API + path, {method, headers});
+    if(!res.ok){
+      const txt = await res.text();
+      throw new Error('HTTP ' + res.status + (txt ? ': ' + txt.slice(0,200) : ''));
+    }
+    const data = await res.json();
+    render(mode, data);
+  }catch(e){
+    $('err').hidden = false;
+    $('err').textContent = '请求失败：' + e.message;
+    $('answer').textContent = '';
+  }finally{
+    busy = false;
+    btn.disabled = false;
+    btn.textContent = '提问';
+  }
+}
+
+function render(mode, data){
+  const cits = mode === 'search' ? data : (data.citations || []);
+  const answer = mode === 'search' ? null : data.answer;
+  if(answer){
+    $('answer').className = 'answer';
+    $('answer').textContent = answer;
+  }else{
+    $('answer').className = 'answer empty';
+    $('answer').textContent = '（仅检索模式，答案见下方证据）';
+  }
+  if(cits && cits.length){
+    $('cit').hidden = false;
+    $('cits').innerHTML = cits.map((c,i) => `
+      <div class="cit-item">
+        <div class="meta">来源 #${i+1} · 得分 ${c.score?.toFixed(4) ?? '-'} · 第 ${c.page_number} 页${c.section_title ? ' · ' + c.section_title : ''}</div>
+        <div class="src">${c.paper_title ? c.paper_title : 'paper #' + (c.paper_id ?? '?')}</div>
+        <div style="margin-top:4px">${escapeHtml(c.content).slice(0,400)}…</div>
+      </div>`).join('');
+  }else{
+    $('cit').hidden = true;
+  }
+}
+
+function escapeHtml(s){return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+$('q').addEventListener('keydown', e => { if(e.key === 'Enter') run(); });
+</script>
+</body>
+</html>

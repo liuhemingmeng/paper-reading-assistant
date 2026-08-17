@@ -5,6 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, status
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .database import (
@@ -20,9 +23,11 @@ from .answer_evaluation import (
     OpenAICompatibleFaithfulnessJudge,
     evaluate_answers,
 )
+from .auth import verify_api_key
 from .embeddings import EmbeddingConfigurationError, EmbeddingResponseError, get_default_embedder
 from .evaluation import EvaluationCase, evaluate_retrieval
 from .llm_client import LLMConfigurationError, LLMResponseError, OpenAICompatibleClient
+from .models import Paper, PaperChunk, PaperDocument
 from .pdf_processing import PDFProcessingError, UPLOAD_ROOT, chunk_pages, extract_pdf_pages, save_upload
 from .retrieval import TextEmbedder
 from .schemas import (
@@ -58,6 +63,8 @@ from .services import (
     list_chunks,
     list_papers,
     retrieve_chunks,
+    retrieve_corpus,
+    answer_question_corpus,
     save_processed_document,
     update_paper,
 )
@@ -74,8 +81,9 @@ def create_app(
 
     app = FastAPI(
         title="Paper Reading Assistant API",
-        version="0.6.0",
+        version="0.7.0",
         description="Manage papers, parse PDFs, retrieve source-aware evidence with a configurable embedder, answer with citations, and evaluate retrieval.",
+        dependencies=[Depends(verify_api_key)],
     )
     app.state.session_factory = session_factory
     app.state.embedder = embedder or get_default_embedder()
@@ -174,6 +182,93 @@ def create_app(
             return list_chunks(session, paper_id, offset, limit)
         except (PaperNotFoundError, DocumentNotFoundError) as error:
             raise not_found(error) from error
+
+    @app.get("/corpus/search", response_model=list[RetrievalResultRead])
+    def search_corpus_route(
+        query: str,
+        limit: int = 3,
+        session: Session = Depends(get_db_session),
+    ) -> list[RetrievalResultRead]:
+        validate_retrieval_limit(limit)
+        try:
+            results = retrieve_corpus(session, query, limit=limit, embedder=app.state.embedder)
+            chunk_ids = [chunk.id for chunk, _ in results]
+            paper_map = {
+                chunk.id: paper
+                for chunk, paper in session.execute(
+                    select(PaperChunk, Paper).join(PaperDocument, PaperDocument.id == PaperChunk.document_id).join(Paper, Paper.id == PaperDocument.paper_id).where(PaperChunk.id.in_(chunk_ids))
+                ).all()
+            }
+            return [
+                RetrievalResultRead(
+                    chunk_id=chunk.id,
+                    sequence=chunk.sequence,
+                    page_number=chunk.page_number,
+                    section_title=chunk.section_title,
+                    content=chunk.content,
+                    score=round(score, 6),
+                    paper_id=paper_map[chunk.id].id if chunk.id in paper_map else None,
+                    paper_title=paper_map[chunk.id].title if chunk.id in paper_map else None,
+                )
+                for chunk, score in results
+            ]
+        except RetrievalNotReadyError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except EmbeddingResponseError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+        except (NoRelevantEvidenceError, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+
+    @app.post("/corpus/questions:answer", response_model=GroundedAnswerRead)
+    def answer_corpus_route(
+        question: str,
+        limit: int = 5,
+        session: Session = Depends(get_db_session),
+    ) -> GroundedAnswerRead:
+        validate_retrieval_limit(limit)
+        try:
+            answer, evidence = answer_question_corpus(
+                session,
+                question,
+                OpenAICompatibleClient.from_environment(),
+                limit=limit,
+                embedder=app.state.embedder,
+            )
+            chunk_ids = [chunk.id for chunk, _ in evidence]
+            paper_map = {
+                chunk.id: paper
+                for chunk, paper in session.execute(
+                    select(PaperChunk, Paper)
+                    .join(PaperDocument, PaperDocument.id == PaperChunk.document_id)
+                    .join(Paper, Paper.id == PaperDocument.paper_id)
+                    .where(PaperChunk.id.in_(chunk_ids))
+                ).all()
+            }
+            return GroundedAnswerRead(
+                answer=answer.answer,
+                model=answer.model,
+                citations=[
+                    RetrievalResultRead(
+                        chunk_id=chunk.id,
+                        sequence=chunk.sequence,
+                        page_number=chunk.page_number,
+                        section_title=chunk.section_title,
+                        content=chunk.content,
+                        score=round(score, 6),
+                        paper_id=paper_map[chunk.id].id if chunk.id in paper_map else None,
+                        paper_title=paper_map[chunk.id].title if chunk.id in paper_map else None,
+                    )
+                    for chunk, score in evidence
+                ],
+            )
+        except RetrievalNotReadyError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except (NoRelevantEvidenceError, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)) from error
+        except LLMConfigurationError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        except (LLMResponseError, EmbeddingResponseError) as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
 
     @app.post("/papers/{paper_id}/retrieval:index", response_model=RetrievalIndexRead)
     def index_document_route(paper_id: int, session: Session = Depends(get_db_session)) -> RetrievalIndexRead:
@@ -382,6 +477,17 @@ def create_app(
             return PaperInsightRead.from_record(get_latest_insight(session, paper_id))
         except (PaperNotFoundError, InsightNotFoundError) as error:
             raise not_found(error) from error
+
+    @app.get("/insight", response_class=FileResponse, include_in_schema=False)
+    def frontend_index() -> FileResponse:
+        index_path = Path(__file__).resolve().parent.parent.parent / "frontend" / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="frontend not bundled")
+
+    static_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
     return app
 

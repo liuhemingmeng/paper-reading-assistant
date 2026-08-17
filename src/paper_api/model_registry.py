@@ -54,6 +54,14 @@ def get_embedder_specs() -> list[EmbedderSpec]:
     Volcano keys come from ``EMBEDDING_API_KEY``; SiliconFlow keys come from
     ``SILICONFLOW_API_KEY``. A model whose key is missing is omitted so callers
     can run the offline subset without erroring.
+
+    Notes on the production-selected model:
+    - ``siliconflow-bge-m3`` is the default production embedder (document-level
+      R@1=0.953 in the 129-paper benchmark; reranker gains ~0 on top of it).
+    - The two vision/multimodal embedders (``volcano-vision-251215`` and
+      ``siliconflow-qwen3vl-embed-8b``) are kept here only for offline
+      experimentation; they are weak on pure-text retrieval and are NOT used by
+      the API's default path.
     """
     load_local_env()
     volcano_key = os.getenv("EMBEDDING_API_KEY", "").strip()
@@ -61,6 +69,7 @@ def get_embedder_specs() -> list[EmbedderSpec]:
 
     specs: list[EmbedderSpec] = []
     if volcano_key:
+        # Vision/multimodal — experimental only, excluded from default retrieval.
         specs.append(
             EmbedderSpec(
                 name="volcano-vision-251215",
@@ -68,15 +77,6 @@ def get_embedder_specs() -> list[EmbedderSpec]:
                 api_key=volcano_key,
                 model="doubao-embedding-vision-251215",
                 endpoint="/embeddings/multimodal",
-            )
-        )
-        specs.append(
-            EmbedderSpec(
-                name="volcano-large-text-250515",
-                base_url=VOLCANO_BASE_URL,
-                api_key=volcano_key,
-                model="doubao-embedding-large-text-250515",
-                endpoint="/embeddings",
             )
         )
     if silicon_key:
@@ -139,6 +139,10 @@ def get_llm_specs() -> list[LLMSpec]:
     if volcano_key:
         specs.extend(
             [
+                # glm-4-7-251222 is provisioned in the Volcano catalog but the
+                # current API key returns 404 InvalidEndpointOrModel at runtime;
+                # kept here for when the key is re-provisioned, excluded from
+                # the reachable list automatically by smoke_models.py.
                 LLMSpec("volcano-glm-4-7", VOLCANO_BASE_URL, volcano_key, "glm-4-7-251222"),
                 LLMSpec("volcano-doubao-seed-2-0-lite", VOLCANO_BASE_URL, volcano_key, "doubao-seed-2-0-lite-260428"),
                 LLMSpec("volcano-deepseek-v4-flash", VOLCANO_BASE_URL, volcano_key, "deepseek-v4-flash-260425"),

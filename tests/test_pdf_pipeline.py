@@ -644,3 +644,41 @@ def test_faithfulness_judge_from_environment_requires_llm(monkeypatch: pytest.Mo
 
     with pytest.raises(LLMNotConfiguredForJudgingError):
         OpenAICompatibleFaithfulnessJudge.from_environment()
+
+
+def test_corpus_search_returns_evidence_across_multiple_papers(tmp_path: Path) -> None:
+    """Cross-library retrieval must surface evidence regardless of paper_id."""
+    from paper_api.api import create_app
+    from paper_api.retrieval import LocalHashingEmbedder
+
+    with TestClient(
+        create_app("sqlite://", upload_root=tmp_path / "uploads", embedder=LocalHashingEmbedder())
+    ) as client:
+        paper_a = create_paper(client)
+        assert upload_pdf(
+            client,
+            paper_a,
+            pdf_bytes("1 Method\nRetrieval augmented generation combines retrieval with generation."),
+        ).status_code == 201
+        assert client.post(f"/papers/{paper_a}/retrieval:index").status_code == 200
+
+        paper_b = create_paper(client)
+        assert upload_pdf(
+            client,
+            paper_b,
+            pdf_bytes("1 Results\nThe dense retriever recall reached ninety five percent."),
+        ).status_code == 201
+        assert client.post(f"/papers/{paper_b}/retrieval:index").status_code == 200
+
+        # Query targets paper B's content; corpus search should return it without a paper_id hint.
+        result = client.get("/corpus/search", params={"query": "dense retriever recall", "limit": 2})
+        assert result.status_code == 200, result.text
+        hits = result.json()
+        assert hits, "corpus search must return at least one hit"
+        titles = {hit.get("paper_title") for hit in hits}
+        assert any(t and "recall" not in t.lower() for t in titles) or hits[0]["paper_id"] == paper_b
+
+
+def test_corpus_search_rejects_blank_query(client: TestClient) -> None:
+    response = client.get("/corpus/search", params={"query": "   "})
+    assert response.status_code == 422

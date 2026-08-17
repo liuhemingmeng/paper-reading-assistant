@@ -178,6 +178,8 @@ class RetrievalResultRead(BaseModel):
     section_title: str | None
     content: str
     score: float
+    paper_id: int | None = None
+    paper_title: str | None = None
 
 
 class RetrievalIndexRead(BaseModel):
