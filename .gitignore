@@ -36,6 +36,10 @@ pytest-cache-files-*/
 # WorkBuddy project metadata
 .workbuddy/
 
+# 内部开发与学习文档（仅本地保留，不上传 GitHub）
+docs/
+learn/
+
 # IDE and OS files
 .vscode/
 .idea/
