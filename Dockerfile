@@ -1,8 +1,13 @@
 FROM python:3.11-slim AS base
 
+# Optional PyPI mirror passed at build time (e.g. a China mirror for faster
+# installs). Defaults to upstream PyPI so the image stays portable.
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_INDEX_URL=$PIP_INDEX_URL
 
 WORKDIR /app
 
