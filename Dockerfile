@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.6
 FROM python:3.11-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -13,13 +12,15 @@ RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends libpq5 && \
     rm -rf /var/lib/apt/lists/*
 
+# Copy source BEFORE installing the project: `pip install .` builds the wheel
+# from src/, so the package tree must already be present in the build context.
 COPY pyproject.toml ./
+COPY src ./src
+COPY frontend ./frontend
+
 RUN pip install --upgrade pip && \
     pip install . && \
     pip install "gunicorn>=21,<23" "uvicorn[standard]>=0.30,<1.0"
-
-COPY src ./src
-COPY frontend ./frontend
 
 # Secret-free image: all keys come from the container environment at runtime.
 EXPOSE 8000
