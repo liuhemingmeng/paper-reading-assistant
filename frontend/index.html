@@ -38,6 +38,18 @@
   .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--brand);border-top-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:6px}
   @keyframes sp{to{transform:rotate(360deg)}}
   .pill{display:inline-block;font-size:11px;padding:1px 8px;border-radius:999px;background:var(--brand-soft);color:var(--brand);margin-left:6px}
+  .settings{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:12px 16px;margin-bottom:16px}
+  .settings summary{cursor:pointer;font-weight:600;color:var(--ink)}
+  .settings .hint{color:var(--muted);font-size:12px;margin:10px 0 6px}
+  .settings .grp{font-size:12px;font-weight:600;color:var(--muted);margin:12px 0 6px}
+  .settings label{display:block;font-size:12px;color:var(--muted);margin-bottom:8px}
+  .settings label input{display:block;width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;margin-top:3px}
+  .settings label input:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft);outline:none}
+  .settings button{border:0;background:var(--brand);color:#fff;border-radius:8px;padding:9px 18px;font-size:14px;cursor:pointer}
+  .settings button:disabled{opacity:.6;cursor:default}
+  .settings-msg{font-size:13px;margin-top:10px;padding:10px 12px;border-radius:8px}
+  .settings-msg.ok{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46}
+  .settings-msg.err{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c}
 </style>
 </head>
 <body>
@@ -49,6 +61,22 @@
     <span>API Key</span>
     <input id="apikey" type="password" placeholder="X-API-Key（未启用鉴权时留空）">
   </div>
+
+  <details class="settings">
+    <summary>模型密钥设置（Embedding / LLM）</summary>
+    <p class="hint">填入你申请的 key 后点保存即可生效，无需重启。仅填写想改的字段，留空表示不改。改了 Embedding 后需对论文<strong>重新建索引</strong>。</p>
+    <div class="grp">Embedding（检索）</div>
+    <label>Base URL<input id="emb_url" placeholder="https://api.siliconflow.cn/v1"></label>
+    <label>API Key<input id="emb_key" type="password" placeholder="EMBEDDING_API_KEY"></label>
+    <label>Model<input id="emb_model" placeholder="BAAI/bge-m3"></label>
+    <label>Endpoint<input id="emb_ep" placeholder="/embeddings"></label>
+    <div class="grp">LLM（问答生成）</div>
+    <label>Base URL<input id="llm_url" placeholder="https://ark.cn-beijing.volces.com/api/v3"></label>
+    <label>API Key<input id="llm_key" type="password" placeholder="LLM_API_KEY"></label>
+    <label>Model<input id="llm_model" placeholder="deepseek-v4-flash-260425"></label>
+    <button id="saveSettings" onclick="saveSettings()">保存密钥</button>
+    <div id="settingsMsg" class="settings-msg" hidden></div>
+  </details>
 
   <div class="mode">
     <label><input type="radio" name="mode" value="answer" checked> 问答（生成答案）</label>
@@ -134,6 +162,48 @@ function render(mode, data){
 }
 
 function escapeHtml(s){return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+async function saveSettings(){
+  const btn = $('saveSettings');
+  const msg = $('settingsMsg');
+  msg.hidden = true;
+  // 只发送非空的字段（留空 = 不改）
+  const payload = {};
+  const map = {
+    emb_url:'embedding_base_url', emb_key:'embedding_api_key', emb_model:'embedding_model', emb_ep:'embedding_endpoint',
+    llm_url:'llm_base_url', llm_key:'llm_api_key', llm_model:'llm_model'
+  };
+  for(const [id, key] of Object.entries(map)){
+    const v = $(id).value.trim();
+    if(v) payload[key] = v;
+  }
+  if(Object.keys(payload).length === 0){
+    msg.hidden = false; msg.className = 'settings-msg err';
+    msg.textContent = '请至少填一个要修改的字段。';
+    return;
+  }
+  const key = $('apikey').value.trim();
+  const headers = {'Content-Type':'application/json'};
+  if(key) headers['X-API-Key'] = key;
+  btn.disabled = true; btn.textContent = '保存中…';
+  try{
+    const res = await fetch(API + '/settings', {method:'POST', headers, body: JSON.stringify(payload)});
+    if(!res.ok){
+      const txt = await res.text();
+      throw new Error('HTTP ' + res.status + (txt ? ': ' + txt.slice(0,200) : ''));
+    }
+    const data = await res.json();
+    msg.hidden = false; msg.className = 'settings-msg ok';
+    msg.textContent = '已保存 ✅ 当前 Embedding 模型：' + (data.embedding_model || '?') +
+      '；LLM：' + (data.llm_model || '未配置') +
+      '。若换了 Embedding 模型，请对每篇论文重新建索引（重新上传 PDF 后点建索引）后再检索。';
+  }catch(e){
+    msg.hidden = false; msg.className = 'settings-msg err';
+    msg.textContent = '保存失败：' + e.message;
+  }finally{
+    btn.disabled = false; btn.textContent = '保存密钥';
+  }
+}
 
 $('q').addEventListener('keydown', e => { if(e.key === 'Enter') run(); });
 </script>

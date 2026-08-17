@@ -27,6 +27,7 @@ from .answer_evaluation import (
 )
 from .auth import verify_api_key
 from .embeddings import EmbeddingConfigurationError, EmbeddingResponseError, get_default_embedder
+from .settings import write_env_values
 from .evaluation import EvaluationCase, evaluate_retrieval
 from .llm_client import LLMConfigurationError, LLMResponseError, OpenAICompatibleClient
 from .models import Paper, PaperChunk, PaperDocument
@@ -47,6 +48,8 @@ from .schemas import (
     RetrievalEvaluationRead,
     RetrievalIndexRead,
     RetrievalResultRead,
+    SettingsStatus,
+    SettingsUpdate,
 )
 from .services import (
     DocumentNotFoundError,
@@ -278,6 +281,50 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
         except (LLMResponseError, EmbeddingResponseError) as error:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+
+    @app.get("/settings/status", response_model=SettingsStatus)
+    def settings_status_route() -> SettingsStatus:
+        """Report the active provider models without exposing any secrets."""
+        emb_model = app.state.embedder.model if app.state.embedder is not None else "local-hashing-v1"
+        llm_configured = all(
+            os.getenv(var, "").strip() for var in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL")
+        )
+        llm_model = os.getenv("LLM_MODEL", "").strip() if llm_configured else None
+        return SettingsStatus(embedding_model=emb_model, llm_model=llm_model)
+
+    @app.post("/settings", response_model=SettingsStatus)
+    def update_settings_route(body: SettingsUpdate) -> SettingsStatus:
+        """Persist provider keys supplied from the UI and re-wire the embedder.
+
+        Only the fields the caller actually sends are changed (``None`` means
+        "leave as-is"). Values are applied to the process environment immediately
+        and, when a ``.env`` file exists next to the working directory, written
+        back so they survive a restart. The retrieval embedder is rebuilt so new
+        indexes/queries use the updated model without a server restart. The LLM
+        client is created per request from the environment, so it picks the new
+        key up automatically. ``RAG_API_KEY`` is intentionally not touched here.
+        """
+        updates: dict[str, str] = {}
+        mapping = {
+            "embedding_base_url": "EMBEDDING_BASE_URL",
+            "embedding_api_key": "EMBEDDING_API_KEY",
+            "embedding_model": "EMBEDDING_MODEL",
+            "embedding_endpoint": "EMBEDDING_ENDPOINT",
+            "llm_base_url": "LLM_BASE_URL",
+            "llm_api_key": "LLM_API_KEY",
+            "llm_model": "LLM_MODEL",
+        }
+        for field, env_key in mapping.items():
+            value = getattr(body, field)
+            if value is not None:
+                updates[env_key] = value
+        if not updates:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="no settings provided")
+        for env_key, value in updates.items():
+            os.environ[env_key] = value
+        write_env_values(updates)
+        app.state.embedder = get_default_embedder()
+        return settings_status_route()
 
     @app.post("/papers/{paper_id}/retrieval:index", response_model=RetrievalIndexRead)
     def index_document_route(paper_id: int, session: Session = Depends(get_db_session)) -> RetrievalIndexRead:

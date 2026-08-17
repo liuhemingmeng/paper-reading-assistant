@@ -92,6 +92,36 @@ class PaperChunkRead(BaseModel):
     char_count: int
 
 
+class SettingsUpdate(BaseModel):
+    """Provider keys the UI lets the user fill in at runtime (no RAG_API_KEY)."""
+
+    embedding_base_url: str | None = None
+    embedding_api_key: str | None = None
+    embedding_model: str | None = None
+    embedding_endpoint: str | None = None
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model: str | None = None
+
+    @field_validator(
+        "embedding_base_url", "embedding_api_key", "embedding_model",
+        "embedding_endpoint", "llm_base_url", "llm_api_key", "llm_model",
+    )
+    @classmethod
+    def strip_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+class SettingsStatus(BaseModel):
+    """Non-secret view of the active provider configuration."""
+
+    embedding_model: str
+    llm_model: str | None
+
+
 class EvaluationCaseRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1_000)
     expected_page_numbers: list[int] = Field(min_length=1, max_length=10)
