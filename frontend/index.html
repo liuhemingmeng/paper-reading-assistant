@@ -118,7 +118,8 @@ async function run(){
   const headers = {'Content-Type':'application/json'};
   if(key) headers['X-API-Key'] = key;
   const path = mode === 'search' ? '/corpus/search?query=' + encodeURIComponent(q) + '&limit=5' : '/corpus/questions:answer?question=' + encodeURIComponent(q) + '&limit=5';
-  const method = 'GET';
+  // 检索是 GET 路由，问答是 POST 路由（后端定义如此）——方法必须对应，否则 405。
+  const method = mode === 'search' ? 'GET' : 'POST';
   try{
     const res = await fetch(API + path, {method, headers});
     if(!res.ok){
