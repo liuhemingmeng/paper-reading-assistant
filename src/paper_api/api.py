@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Response, Security, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
@@ -25,7 +26,7 @@ from .answer_evaluation import (
     OpenAICompatibleFaithfulnessJudge,
     evaluate_answers,
 )
-from .auth import verify_api_key
+from .auth import admin_key_header, verify_api_key
 from .embeddings import EmbeddingConfigurationError, EmbeddingResponseError, get_default_embedder
 from .rerank import RerankConfigurationError, RerankResponseError, SiliconFlowReranker
 from .settings import write_env_values
@@ -355,6 +356,23 @@ def create_app(
         write_env_values(updates)
         app.state.embedder = get_default_embedder()
         return settings_status_route()
+
+    @app.post("/admin/rotate-key", include_in_schema=False)
+    def rotate_key_route(admin_key: str | None = Security(admin_key_header)) -> dict[str, str]:
+        """Generate a new user-facing API key, invalidating the previous one.
+
+        Gated by a separate ADMIN_KEY (never shown to end users). ``verify_api_key``
+        reads RAG_API_KEY from the environment on every request, so updating it here
+        takes effect immediately without a restart. The new key is also written back
+        to ``.env`` when present so it survives a container restart.
+        """
+        expected = os.getenv("ADMIN_KEY", "").strip()
+        if not expected or admin_key != expected:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key")
+        new_key = secrets.token_hex(16)
+        os.environ["RAG_API_KEY"] = new_key
+        write_env_values({"RAG_API_KEY": new_key})
+        return {"api_key": new_key}
 
     @app.post("/papers/{paper_id}/retrieval:index", response_model=RetrievalIndexRead)
     def index_document_route(paper_id: int, session: Session = Depends(get_db_session)) -> RetrievalIndexRead:

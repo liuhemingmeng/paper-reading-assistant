@@ -9,11 +9,14 @@ from fastapi.security import APIKeyHeader
 
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+admin_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
 
 # Routes reachable without an API key so the chat UI, static assets, the
 # health probe and the interactive API docs load for any visitor. All data
 # routes (papers, corpus retrieval, answers) stay protected.
-_PUBLIC_EXACT = {"/", "/health", "/docs", "/openapi.json"}
+# /admin/rotate-key is intentionally reachable without the user-facing key so
+# the owner can rotate it; the route itself is gated by a separate ADMIN_KEY.
+_PUBLIC_EXACT = {"/", "/health", "/docs", "/openapi.json", "/admin/rotate-key"}
 _PUBLIC_PREFIXES = ("/insight", "/static")
 
 
@@ -37,4 +40,4 @@ def verify_api_key(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing API key")
 
 
-__all__ = ["api_key_header", "verify_api_key"]
+__all__ = ["admin_key_header", "api_key_header", "verify_api_key"]

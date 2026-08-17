@@ -70,17 +70,15 @@
     <input id="apikey" type="password" placeholder="X-API-Key（未启用鉴权时留空）">
   </div>
 
-  <div class="upload">
-    <button id="toggleUpload" onclick="toggleUpload()">上传文档（可选）</button>
-    <div id="uploadInfo" class="upload-info" hidden>
-      <p>本地已内置以下领域的样例文档，<strong>无需上传即可直接体验问答</strong>：</p>
-      <ul>
-        <li>检索增强生成（RAG）</li>
-        <li>注意力机制与 Transformer（Attention）</li>
-        <li>向量数据库与近似最近邻检索（VectorDB）</li>
-      </ul>
-      <p class="hint">接入你自己的 PDF 为可选扩展功能；当前演示版该按钮仅作展示，未开放实际上传通道。</p>
-    </div>
+  <div class="upload-info">
+    <p><strong>上传文档（可选）</strong></p>
+    <p>本地已内置以下领域的样例文档，<strong>无需上传即可直接体验问答</strong>：</p>
+    <ul>
+      <li>检索增强生成（RAG）</li>
+      <li>注意力机制与 Transformer（Attention）</li>
+      <li>向量数据库与近似最近邻检索（VectorDB）</li>
+    </ul>
+    <p class="hint">接入你自己的 PDF 为可选扩展功能。</p>
   </div>
 
   <details class="settings">
@@ -97,6 +95,13 @@
     <label>Model<input id="llm_model" placeholder="deepseek-v4-flash-260425"></label>
     <button id="saveSettings" onclick="saveSettings()">保存密钥</button>
     <div id="settingsMsg" class="settings-msg" hidden></div>
+
+    <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+    <div class="grp">访问密钥轮换（管理员）</div>
+    <p class="hint">生成一个新的访问密钥并立即使旧密钥失效。把新密钥发给需要访问的人（如 HR）即可；想收回权限时再次轮换。</p>
+    <label>Admin Key<input id="admin_key" type="password" placeholder="ADMIN_KEY"></label>
+    <button id="rotateKey" onclick="rotateKey()">轮换访问密钥（旧密钥立即失效）</button>
+    <div id="rotateMsg" class="settings-msg" hidden></div>
   </details>
 
   <div class="mode">
@@ -229,8 +234,32 @@ async function saveSettings(){
 
 $('q').addEventListener('keydown', e => { if(e.key === 'Enter') run(); });
 
-function toggleUpload(){
-  $('uploadInfo').hidden = !$('uploadInfo').hidden;
+async function rotateKey(){
+  const btn = $('rotateKey');
+  const msg = $('rotateMsg');
+  msg.hidden = true;
+  const admin = $('admin_key').value.trim();
+  if(!admin){
+    msg.hidden = false; msg.className = 'settings-msg err';
+    msg.textContent = '请输入 Admin Key。';
+    return;
+  }
+  btn.disabled = true; btn.textContent = '轮换中…';
+  try{
+    const res = await fetch(API + '/admin/rotate-key', {method:'POST', headers:{'X-Admin-Key': admin}});
+    if(!res.ok){
+      const t = await res.text();
+      throw new Error('HTTP ' + res.status + (t ? ': ' + t.slice(0,200) : ''));
+    }
+    const d = await res.json();
+    msg.hidden = false; msg.className = 'settings-msg ok';
+    msg.textContent = '已生成新访问密钥（旧密钥立即失效）：' + d.api_key + ' —— 将此密钥提供给对方即可访问。';
+  }catch(e){
+    msg.hidden = false; msg.className = 'settings-msg err';
+    msg.textContent = '轮换失败：' + e.message;
+  }finally{
+    btn.disabled = false; btn.textContent = '轮换访问密钥（旧密钥立即失效）';
+  }
 }
 
 // 仅当服务端确实不需要鉴权（RAG_API_KEY 为空）时才隐藏 API Key 框；
