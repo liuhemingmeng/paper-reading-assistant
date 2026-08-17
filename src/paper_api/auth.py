@@ -18,7 +18,7 @@ _PUBLIC_PREFIXES = ("/insight", "/static")
 
 
 def verify_api_key(
-    request: Request | None = None,
+    request: Request,
     api_key: str | None = Security(api_key_header),
 ) -> None:
     """Require X-API-Key when RAG_API_KEY is configured.
