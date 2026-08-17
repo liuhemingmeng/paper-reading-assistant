@@ -120,6 +120,7 @@ class SettingsStatus(BaseModel):
 
     embedding_model: str
     llm_model: str | None
+    api_key_required: bool = False
 
 
 class EvaluationCaseRequest(BaseModel):

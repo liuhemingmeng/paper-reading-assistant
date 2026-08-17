@@ -50,6 +50,14 @@
   .settings-msg{font-size:13px;margin-top:10px;padding:10px 12px;border-radius:8px}
   .settings-msg.ok{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46}
   .settings-msg.err{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c}
+  .upload{margin-bottom:14px}
+  .upload button{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:9px 16px;font-size:13px;cursor:pointer}
+  .upload button:active{background:var(--bg)}
+  .upload-info{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-top:10px;font-size:14px}
+  .upload-info p{margin:8px 0}
+  .upload-info ul{margin:8px 0;padding-left:22px}
+  .upload-info li{margin:4px 0}
+  .upload-info .hint{color:var(--muted);font-size:13px}
 </style>
 </head>
 <body>
@@ -57,9 +65,22 @@
   <h1>论文阅读助手 <span class="pill">跨库 RAG</span></h1>
   <p class="sub">向整篇论文语料库提问，答案附带可追溯的来源引用。检索用 bge-m3，生成用 deepseek-v4-flash。</p>
 
-  <div class="apikey">
+  <div class="apikey" id="apikeyRow">
     <span>API Key</span>
     <input id="apikey" type="password" placeholder="X-API-Key（未启用鉴权时留空）">
+  </div>
+
+  <div class="upload">
+    <button id="toggleUpload" onclick="toggleUpload()">上传文档（可选）</button>
+    <div id="uploadInfo" class="upload-info" hidden>
+      <p>本地已内置以下领域的样例文档，<strong>无需上传即可直接体验问答</strong>：</p>
+      <ul>
+        <li>检索增强生成（RAG）</li>
+        <li>注意力机制与 Transformer（Attention）</li>
+        <li>向量数据库与近似最近邻检索（VectorDB）</li>
+      </ul>
+      <p class="hint">接入你自己的 PDF 为可选扩展功能；当前演示版该按钮仅作展示，未开放实际上传通道。</p>
+    </div>
   </div>
 
   <details class="settings">
@@ -207,6 +228,24 @@ async function saveSettings(){
 }
 
 $('q').addEventListener('keydown', e => { if(e.key === 'Enter') run(); });
+
+function toggleUpload(){
+  $('uploadInfo').hidden = !$('uploadInfo').hidden;
+}
+
+// 仅当服务端确实不需要鉴权（RAG_API_KEY 为空）时才隐藏 API Key 框；
+// 需要鉴权时该接口本身会 401，catch 后保持可见，避免把必填项误隐藏。
+async function init(){
+  try{
+    const res = await fetch(API + '/settings/status');
+    if(!res.ok) return;
+    const s = await res.json();
+    if(s.api_key_required === false){
+      $('apikeyRow').hidden = true;
+    }
+  }catch(e){ /* 保留默认可见 */ }
+}
+init();
 </script>
 </body>
 </html>

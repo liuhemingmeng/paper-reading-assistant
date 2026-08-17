@@ -319,7 +319,8 @@ def create_app(
             os.getenv(var, "").strip() for var in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL")
         )
         llm_model = os.getenv("LLM_MODEL", "").strip() if llm_configured else None
-        return SettingsStatus(embedding_model=emb_model, llm_model=llm_model)
+        api_key_required = bool(os.getenv("RAG_API_KEY", "").strip())
+        return SettingsStatus(embedding_model=emb_model, llm_model=llm_model, api_key_required=api_key_required)
 
     @app.post("/settings", response_model=SettingsStatus)
     def update_settings_route(body: SettingsUpdate) -> SettingsStatus:
