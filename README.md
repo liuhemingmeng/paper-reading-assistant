@@ -73,6 +73,7 @@
   - `scripts/run_rag_demo.py` 用选定配置（bge-m3 检索 + deepseek-v4-flash 生成，1000/120，top-10）跑通端到端 RAG：加载 QA 子集文档 → bge-m3 可续跑缓存 embed → top-10 余弦检索 → LLM 生成带 citation 答案；demo 中 top1 命中即问题来源文档、答案基于证据准确。
   - `docs/tutorials/week-12-deployment-readiness.html` 部署就绪路线：当前是本地原型、能上云，但需补 P0/P1/P2 八块（生产进程 / Docker / 密钥管理 / 向量库 / 鉴权 / 限流 / 前端 / 可观测 / CI-CD）；给出云服务器最小部署 8 步与 Dockerfile 骨架，向量库持久化（pgvector）列为上生产第一基石。
   - 第 13 周 GitHub 同类项目对比分析（`docs/tutorials/week-13-competitive-analysis.html`）：调研 paper-qa / RAGFlow / QueryGenie / Arxiv-researcher 等，确认本项目工程质量与评测闭环领先多数轻量项目，但产品化落后一代；核心缺口为「单篇 paper 维度 + SQLite 暴力余弦」，缺跨库检索、向量库 ANN、前端、鉴权；产出 P0/P1/P2 改善路线图，最高 ROI 第一刀是「接 pgvector + 跨库检索 API」。
+  - 第 14 周从面试视角产出项目改造计划（`docs/tutorials/week-14-project-plan.html`）：把对比结论翻译成「必要增加 / 应删减 / 必保留」三张清单 + Phase 0~4 分阶段计划（约 6 人日）。核心加法＝跨库检索 API + pgvector 持久化；应收敛＝视觉/多模态 embedder、LocalHashing 默认、6 模型横测全组合、404 的 glm-4-7、硬接 reranker；必保留＝分层架构 + 65 单测 + IR/faithfulness 评测闭环 + 可续跑缓存容错。
 
 ## 环境要求
 
@@ -324,6 +325,7 @@ python -m pytest -q
 - [第 11 周：chunk 切分、真实 QA 基准与配置收敛教程](docs/tutorials/week-11-qa-benchmark-config.html)
 - [第 12 周：端到端 RAG demo 与部署就绪路线教程](docs/tutorials/week-12-deployment-readiness.html)
 - [第 13 周：GitHub 同类项目对比分析与改善路线图](docs/tutorials/week-13-competitive-analysis.html)
+- [第 14 周：从面试视角看项目改造计划](docs/tutorials/week-14-project-plan.html)
 
 也可以检查所有 Python 文件是否能编译：
 
@@ -390,4 +392,4 @@ python -m compileall -q scripts src tests
 
 第 13 周完成 GitHub 同类项目对比分析（paper-qa / RAGFlow / QueryGenie / Arxiv-researcher 等），产出按价值排序的改善路线图（`docs/tutorials/week-13-competitive-analysis.html`）：确认本项目工程质量和评测闭环已强于多数轻量开源项目，但产品化与检索架构落后一代——核心缺口是「单篇 paper 维度 + SQLite 暴力余弦」，缺跨库检索、向量库 ANN、前端、鉴权。最高 ROI 的第一刀是「接 pgvector + 跨库检索 API」。
 
-下一步（按价值排序）：① 跨语料库检索 API（去掉 paper_id 过滤，支持全库检索/问答）——当前最大架构缺口；② 接入 pgvector 替代 SQLite JSON 暴力余弦（华为云容器已就绪）；③ Dockerfile + gunicorn 生产进程；④ 最小前端 UI + 鉴权/限流（对外开放硬门槛）；⑤ 买轻量云按 8 步部署即真正「上线」。所有外部模型调用走标准 OpenAI 兼容协议，换厂商/自托管只改注册表与 `.env`，业务代码不动。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
+下一步（按价值排序，见第 14 周计划）：Phase 0 清理定型（registry 去不可达模型、services 默认 embedder 改真实 bge-m3、README 区分产品/实验代码）；Phase 1 检索内核升级＝跨语料库检索 API（去 paper_id 过滤）+ pgvector 接入（华为云容器已就绪，替 SQLite 暴力余弦），ROI 最高、最该先做；Phase 2 产品外壳＝最小前端 chat UI（答案带 citation）+ API Key 鉴权；Phase 3 部署与工程＝Dockerfile 入仓 + 启用 compose app 服务 + GitHub Actions CI（pytest+ruff）；Phase 4 叙事包装＝README 架构图/Quickstart/评测结果表。所有外部模型调用走标准 OpenAI 兼容协议，换厂商/自托管只改注册表与 `.env`，业务代码不动。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
