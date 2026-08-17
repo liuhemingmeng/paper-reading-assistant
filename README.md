@@ -1,8 +1,29 @@
 # Paper Reading Assistant
 
-一个面向论文和行业研报 AI 阅读助手的学习型项目。本周先完成 Python 工程底座：环境管理、文件与数据处理、HTTP API 调用、重试、命令行参数，以及一个 JSON 持久化的 Todo CLI。
+一个面向论文和行业研报的 AI 阅读助手：从 PDF 上传、分块、语义检索到带引用的 RAG 问答，并配套可复现的检索/答案质量评测闭环。支持单篇检索与跨语料库检索，生产环境可接 pgvector 向量库做 ANN 加速。所有外部模型走标准 OpenAI 兼容协议，换厂商/自托管只改 `.env` 与注册表，业务代码不动。
 
-后续路线会逐步加入 FastAPI、PDF 解析、LLM 调用、向量检索、RAG、Agent、评测和 Docker 部署。
+## 系统架构
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                    前端 chat UI（frontend/）                       │
+│       问答模式（生成带引用的答案） / 检索模式（只看证据）              │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │  HTTP + X-API-Key（可选鉴权）
+┌──────────────────────────────▼──────────────────────────────────┐
+│                 FastAPI（src/paper_api/api.py）                   │
+│   跨语料库：GET /corpus/search   POST /corpus/questions:answer    │
+│   单篇：    GET /papers/{id}/search  POST /papers/{id}/questions:answer │
+│   评测：    /papers/{id}/retrieval:evaluate  /answers:evaluate    │
+└──────────────┬───────────────────────────────┬──────────────────┘
+               │ services.py（检索+生成编排）      │ OpenAI 兼容协议
+┌──────────────▼──────────────────┐   ┌─────────▼──────────────────┐
+│ 存储层（双后端，同一套代码）        │   │ 外部模型（注册表可替换）      │
+│  PostgreSQL + pgvector（生产）    │   │  Embedding: bge-m3 (R@1=0.953)│
+│    HNSW ANN · 余弦距离 · 向量表    │   │  Reranker: qwen3-rerank-4b（可选）│
+│  SQLite（本地开发/测试自动回退）    │   │  LLM: deepseek-v4-flash-260425 │
+└──────────────────────────────────┘   └────────────────────────────┘
+```
 
 ## 当前完成内容
 
@@ -67,13 +88,18 @@
   - `scripts/build_qa_dataset.py` 用 LLM 把证据段落改写成自然语言问题，生成 30 条真实 QA（15 arXiv + 15 行业），作为 reranker 的主场评测集。
   - `scripts/benchmark_qa_retrieval.py` chunk 级真实 QA 检索基准（6 基础检索器 × 2 reranker，doc_id 正例，可续跑），smoke 已验证 pipeline 端到端可用。
   - `src/paper_api/cache_io.py` 原子写 + 周期落盘 + 瞬态锁非致命降级，修掉 Windows 下 OneDrive/IDE 文件锁导致的 PermissionError。
-  - **全量横测主动叫停**：embedding 端点随机断 SSL（UNEXPECTED_EOF_WHILE_READING）且 bge-m3 缓存不完整，而第 9-10 周文档级基准已钉死 embedding/reranker 结论，横测边际价值过低，直接选型。最终配置：bge-m3（R@1=0.953）+ 默认不接 reranker + deepseek-v4-flash-260425 LLM + 1000/120 chunking + top-10 喂 LLM。详见 `docs/tutorials/week-11-qa-benchmark-config.html`。
+  - **检索选型决策（替代全量横测）**：embedding 端点随机断 SSL（UNEXPECTED_EOF_WHILE_READING）且 bge-m3 缓存不完整，而第 9-10 周文档级基准已钉死 embedding/reranker 结论，横测边际价值过低，直接选型而非烧钱补齐数字。最终配置：bge-m3（R@1=0.953）+ 默认不接 reranker + deepseek-v4-flash-260425 LLM + 1000/120 chunking + top-10 喂 LLM。详见 `docs/tutorials/week-11-qa-benchmark-config.html`。
 
 - 端到端 RAG demo 与部署就绪（第 12 周）：
   - `scripts/run_rag_demo.py` 用选定配置（bge-m3 检索 + deepseek-v4-flash 生成，1000/120，top-10）跑通端到端 RAG：加载 QA 子集文档 → bge-m3 可续跑缓存 embed → top-10 余弦检索 → LLM 生成带 citation 答案；demo 中 top1 命中即问题来源文档、答案基于证据准确。
   - `docs/tutorials/week-12-deployment-readiness.html` 部署就绪路线：当前是本地原型、能上云，但需补 P0/P1/P2 八块（生产进程 / Docker / 密钥管理 / 向量库 / 鉴权 / 限流 / 前端 / 可观测 / CI-CD）；给出云服务器最小部署 8 步与 Dockerfile 骨架，向量库持久化（pgvector）列为上生产第一基石。
   - 第 13 周 GitHub 同类项目对比分析（`docs/tutorials/week-13-competitive-analysis.html`）：调研 paper-qa / RAGFlow / QueryGenie / Arxiv-researcher 等，确认本项目工程质量与评测闭环领先多数轻量项目，但产品化落后一代；核心缺口为「单篇 paper 维度 + SQLite 暴力余弦」，缺跨库检索、向量库 ANN、前端、鉴权；产出 P0/P1/P2 改善路线图，最高 ROI 第一刀是「接 pgvector + 跨库检索 API」。
   - 第 14 周从面试视角产出项目改造计划（`docs/tutorials/week-14-project-plan.html`）：把对比结论翻译成「必要增加 / 应删减 / 必保留」三张清单 + Phase 0~4 分阶段计划（约 6 人日）。核心加法＝跨库检索 API + pgvector 持久化；应收敛＝视觉/多模态 embedder、LocalHashing 默认、6 模型横测全组合、404 的 glm-4-7、硬接 reranker；必保留＝分层架构 + 65 单测 + IR/faithfulness 评测闭环 + 可续跑缓存容错。
+  - 第 14 周 Phase 0-3 落地（commit `b1228cd`）：
+    - **Phase 0 清理定型**：`model_registry.py` 标注视觉/多模态 embedder 为实验仅用、glm-4-7 不可达；`.env` 默认 embedder 切为硅基 bge-m3（生产选型 R@1=0.953）。
+    - **Phase 1 检索内核升级**：新增 `vector_store.py`（PostgreSQL + pgvector HNSW ANN，`<=>` 余弦，SQLite 自动回退）；`services.retrieve_corpus` 跨语料库检索（去 paper_id 过滤）；新增 `GET /corpus/search` 与 `POST /corpus/questions:answer` 路由，citations 携带 `paper_title`。
+    - **Phase 2 产品外壳**：`auth.py` API Key 鉴权（`X-API-Key`，`RAG_API_KEY` 未设置时开放）；`frontend/index.html` 单页 chat UI（问答/检索双模式）。
+    - **Phase 3 部署与工程**：`Dockerfile`（gunicorn + uvicorn，密钥不入镜像）、`.dockerignore`、GitHub Actions CI（离线 pytest）。测试 67 passed。
 
 ## 环境要求
 
@@ -100,6 +126,58 @@ python -m pip install -e .
 ```
 
 如果 PowerShell 禁止执行激活脚本，可以直接使用 `.venv\\Scripts\\python.exe` 运行命令，不需要激活环境。
+
+## 快速开始（30 秒看效果）
+
+配置真实模型（可选，不配置也能跑本地 hashing 基线）：
+
+```bash
+# Windows PowerShell
+Copy-Item .env.example .env
+
+# macOS/Linux
+cp .env.example .env
+# 在 .env 填入 EMBEDDING_*（bge-m3）与 LLM_*（deepseek-v4-flash）密钥
+```
+
+启动服务：
+
+```bash
+python -m paper_api
+```
+
+打开前端 chat UI：<http://127.0.0.1:8000/insight>
+
+- **问答模式**：向整篇语料库提问，答案附带来源引用（论文标题 + 页码 + 章节 + 得分）。
+- **检索模式**：只看命中的证据，不调 LLM。
+
+API 直接调用（跨语料库检索，无需 LLM）：
+
+```bash
+curl "http://127.0.0.1:8000/corpus/search?query=neural%20IR&limit=3"
+```
+
+跨语料库问答（需要 LLM 配置，响应中的 `citations` 带 `paper_title`）：
+
+```bash
+curl -X POST "http://127.0.0.1:8000/corpus/questions:answer?question=What%20is%20neural%20IR%3F&limit=5"
+```
+
+> 设置 `RAG_API_KEY` 后所有接口要求 `X-API-Key` 请求头；未设置时开放（本地开发/离线测试默认如此）。生产部署请务必设置。
+
+## 检索评测结果（选型决策）
+
+本项目用真实语料库（129 篇 arXiv/行业文档）做文档级与 QA 级检索基准，结论如下：
+
+| 配置 | R@1 | 结论 |
+|---|---|---|
+| **bge-m3（生产默认）** | **0.953** | 文本检索最强，中英文均衡，1024 维 |
+| qwen3-embed-0.6b | 0.922 | 备选文本模型 |
+| qwen3vl-embed-8b（视觉） | 0.241 | 不适合纯文本检索（arXiv），仅实验 |
+| local-hashing + qwen3-rerank-4b | 0.333 → 0.86 | reranker 的真正价值：救回弱检索器 |
+| bge-m3 + qwen3-rerank-4b | −0.016 | 接在强检索器后几乎无增益，**默认不接** |
+
+**决策原则**：第 11 周全量 QA 横测（6 检索器 × 2 reranker 全组合）在评估后被主动叫停——embedding 端点随机断 SSL、bge-m3 缓存不完整，而第 9-10 周文档级基准已钉死结论。补齐横测数字需重发上万次不稳定网络调用、边际价值过低，故直接选型而非继续烧钱。最终生产配置：**bge-m3 + 默认不接 reranker + deepseek-v4-flash-260425 LLM + 1000/120 chunking + top-10 证据**。
 
 ## Todo CLI 使用
 
@@ -304,7 +382,7 @@ python scripts/api_client.py https://httpbin.org/json --output data/api_response
 python -m pytest -q
 ```
 
-当前预期结果：`61 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理、本地向量索引、Top-K 引用检索、RAG 回答边界、Recall@K/MRR 评测指标、可替换 embedding 客户端与混合模型防护，第 7 周的引用正确性、忠实度裁判与端到端答案评测路由，第 8 周的多模态 embedding 解析回归，第 9 周的 reranker 客户端（payload 构造、响应解析、容错与配置校验）与基准相关单测（BM25 排序、IR 指标正确性）。
+当前预期结果：`67 passed`。测试覆盖 Todo CLI、论文 CRUD、PDF 上传/解析/分块/重传替换/删除清理、本地向量索引、Top-K 引用检索、RAG 回答边界、Recall@K/MRR 评测指标、可替换 embedding 客户端与混合模型防护，第 7 周的引用正确性、忠实度裁判与端到端答案评测路由，第 8 周的多模态 embedding 解析回归，第 9 周的 reranker 客户端（payload 构造、响应解析、容错与配置校验）与基准相关单测（BM25 排序、IR 指标正确性），以及第 14 周的跨语料库检索（多篇论文跨库命中、空查询拒绝）。
 
 ## 教程
 
@@ -342,10 +420,23 @@ python -m compileall -q scripts src tests
 ├── .gitignore
 ├── pyproject.toml
 ├── requirements.txt
+├── Dockerfile
+├── .dockerignore
+├── .github/
+│   └── workflows/
+│       └── ci.yml
 ├── scripts/
 ├── src/
 │   ├── todo_cli/
 │   └── paper_api/
+│       ├── api.py          # FastAPI 路由（含跨库检索/问答）
+│       ├── services.py     # 检索/生成编排
+│       ├── vector_store.py # pgvector 持久化（SQLite 回退）
+│       ├── auth.py         # API Key 鉴权
+│       ├── model_registry.py  # 模型注册表
+│       └── ...
+├── frontend/
+│   └── index.html          # 单页 chat UI
 ├── tests/
 ├── docs/
 │   ├── tutorials/
@@ -379,17 +470,23 @@ python -m compileall -q scripts src tests
 - 用逐题结果审计汇总指标，避免只看一个看似漂亮的平均分。
 - 用 `TextEmbedder` 协议隔离 embedding 实现，让本地基线与真实模型共享同一套检索与评测代码。
 - 让索引与查询共用一个嵌入器，并对混合模型返回明确错误，避免无意义的相似度。
+- 把「单篇检索」抽象为「跨库检索」时，只去掉 paper_id 过滤并复用同一排名逻辑，验证多篇论文证据可混合命中。
+- 用数据库方言探测（PostgreSQL/SQLite）让同一套代码同时服务生产 ANN 与离线测试，避免为测试单独开一套实现。
+- 鉴权中间件不隐式加载 `.env`：生产密钥由容器环境注入，避免每请求重读文件破坏测试隔离。
+- 把「全量横测」这类昂贵实验在结论已钉死时及时叫停，用「选型决策」替代「烧钱补齐数字」，是工程判断力的体现。
 
 ## 下一步
 
-第 8 周已完成真实 Embedding 接入、检索质量对比实验，并建成 138 篇真实公开评测语料库（详见 `docs/tutorials/week-08-embedding-experiment.html` 与 `data/corpus/README.md`）。第 9 周已落地 `Reranker` 协议 + `SiliconFlowReranker` 客户端、`model_registry.py` 多模型登记、`scripts/smoke_models.py` 联网冒烟（8/9 模型可达；火山 `doubao-embedding-large-text-250515` 因 `Retiring`/未开通而 404，已记录并修复错误透出），并完成了**语料级检索基准**：`src/paper_api/corpus.py`（文本抽取）、`retrieval.py` 的 `BM25Retriever`、`ir_metrics.py`（Recall@K/MRR/nDCG@K）、`scripts/benchmark_retrieval.py`。在 129 篇真实文档（arXiv 79 + 行业 50）上对比 6 个基础检索器 × 2 个纯文本 reranker（VL-Reranker-8B 已移除），**全部 12 个组合 errors=0**。关键结论：bge-m3 / qwen3-embed-0.6b 文本检索最强（R@1 0.953 / 0.922）；VL-embedding（qwen3vl-embed-8b）不适合纯文本检索（arXiv R@1 仅 0.241）；reranker 的真正价值是救回弱召回（local-hashing 0.333→0.86、qwen3vl-embed 0.426→0.89），接在强检索器后几乎无增益甚至轻微负向。详见 `docs/tutorials/week-09-multimodel-reranker.html` 与 `docs/tutorials/week-09-retrieval-benchmark.html`。
+**Phase 0-4 已完成**（第 14 周，commit `b1228cd`）：
 
-第 10 周已接入真实 LLM：联网 smoke 5 个候选（火山 glm-4-7 / doubao-seed-2-0-lite / deepseek-v4-flash、硅基 DeepSeek-V3.2 / Qwen3.5-35B），4/5 可达（glm-4-7 因该 key 未开通推理而 404，已登记等待开通）；默认 RAG LLM 设为火山 `deepseek-v4-flash-260425`，并在 `model_registry.py` 新增 LLM 注册表（与 embedding/reranker 对称）。同时永久移除 `Qwen/Qwen3-VL-Reranker-8B`（视觉语言 reranker 纯文本增益不具代表性），reranker 现仅剩 `qwen3-rerank-4b` / `qwen3-rerank-0.6b` 两个纯文本模型。详见 `docs/tutorials/week-10-llm-selection.html`。
+- Phase 0-3 代码落地：跨语料库检索（`/corpus/search` + `/corpus/questions:answer`）+ pgvector 向量库（SQLite 自动回退）+ API Key 鉴权 + 前端 chat UI + Dockerfile + GitHub Actions CI，67 项测试通过。
+- Phase 4 叙事包装：本 README 的架构图 / Quickstart / 评测结果表；第 11 周「全量横测」记录已改写为「选型决策」（见上文「检索评测结果」节）。
 
-第 11 周已完成 chunk 切分模块（`chunking.py`，1000/120，doc_id 溯源，129 篇文档切成 13976 chunk）、真实 QA 数据集（`build_qa_dataset.py`，30 条：15 arXiv + 15 行业）、chunk 级真实 QA 检索基准 harness（`benchmark_qa_retrieval.py`，6 检索器 × 2 reranker，doc_id 正例，可续跑，smoke 已验证 pipeline 端到端可用），以及 `cache_io.py` 原子写 + 周期落盘 + 瞬态锁非致命降级（修掉 Windows OneDrive/IDE 文件锁导致的 PermissionError）。**全量横测被主动叫停**：embedding 端点随机断 SSL（UNEXPECTED_EOF_WHILE_READING）且 bge-m3 缓存不完整，而第 9-10 周文档级基准已钉死 embedding/reranker 结论，横测边际价值过低，直接选型。最终生产配置：bge-m3（R@1=0.953）+ 默认不接 reranker + deepseek-v4-flash-260425 LLM + 1000/120 chunking + top-10 喂 LLM。详见 `docs/tutorials/week-11-qa-benchmark-config.html`。
+**接下来是生产部署**（第 12 周部署就绪路线图的剩余步骤）：
 
-第 12 周已用选定配置跑通端到端 RAG demo（`scripts/run_rag_demo.py`：加载 QA 子集文档 → bge-m3 可续跑缓存 embed → top-10 余弦检索 → deepseek-v4-flash 生成带 citation 答案；demo 中 top1 命中即问题来源文档、答案基于证据准确），并产出部署就绪教程（`docs/tutorials/week-12-deployment-readiness.html`）：当前是本地原型、能上云，但需补 P0/P1/P2 八块（生产进程 / Docker / 密钥管理 / 向量库 / 鉴权 / 限流 / 前端 / 可观测 / CI-CD），并给出云服务器最小部署 8 步与 Dockerfile 骨架，把向量库持久化（pgvector）列为上生产第一基石。
+1. 构建 app 镜像，取消 `docker-compose.yml` 中 app 服务的注释。
+2. 华为云安全组开 80/443（不直接暴露 8000 端口）。
+3. 加 Nginx 反代 + API Key 鉴权/限流。
+4. 端到端验证：上传 PDF → 建索引 → 跨库检索 → 问答，全程走 pgvector。
 
-第 13 周完成 GitHub 同类项目对比分析（paper-qa / RAGFlow / QueryGenie / Arxiv-researcher 等），产出按价值排序的改善路线图（`docs/tutorials/week-13-competitive-analysis.html`）：确认本项目工程质量和评测闭环已强于多数轻量开源项目，但产品化与检索架构落后一代——核心缺口是「单篇 paper 维度 + SQLite 暴力余弦」，缺跨库检索、向量库 ANN、前端、鉴权。最高 ROI 的第一刀是「接 pgvector + 跨库检索 API」。
-
-下一步（按价值排序，见第 14 周计划）：Phase 0 清理定型（registry 去不可达模型、services 默认 embedder 改真实 bge-m3、README 区分产品/实验代码）；Phase 1 检索内核升级＝跨语料库检索 API（去 paper_id 过滤）+ pgvector 接入（华为云容器已就绪，替 SQLite 暴力余弦），ROI 最高、最该先做；Phase 2 产品外壳＝最小前端 chat UI（答案带 citation）+ API Key 鉴权；Phase 3 部署与工程＝Dockerfile 入仓 + 启用 compose app 服务 + GitHub Actions CI（pytest+ruff）；Phase 4 叙事包装＝README 架构图/Quickstart/评测结果表。所有外部模型调用走标准 OpenAI 兼容协议，换厂商/自托管只改注册表与 `.env`，业务代码不动。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
+所有外部模型调用走标准 OpenAI 兼容协议，换厂商/自托管只改注册表与 `.env`，业务代码不动。当前离线 Fake 链路仍保证每次提交都能回归检索命中与引用正确性，不依赖任何外部凭据。
