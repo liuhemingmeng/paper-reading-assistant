@@ -151,13 +151,14 @@ curl -X POST http://127.0.0.1:8000/admin/rotate-key -H "X-Admin-Key: <你的 ADM
 | local-hashing + qwen3-rerank-4b | 0.333 → 0.86 | reranker 救回弱检索器 |
 | bge-m3 + qwen3-rerank-4b | −0.016 | 接在强检索器后几乎无增益，默认不接 |
 
-生产配置：**bge-m3 + 默认不接 reranker + deepseek-v4-flash-260425 + 1000/120 滑动窗口分块 + top-10 证据**。
+生产配置：**bge-m3 + 默认不接 reranker + deepseek-v4-flash-260425 + 1200/160 滑动窗口分块（句子边界优先）+ top-k 证据（默认 3，前端 5）**。
 
 ## Design Decisions
 
 - **为什么 reranker 默认不接**：reranker 的价值在于救回弱检索器（0.333 → 0.86）；接在 bge-m3 这类强检索器之后增益趋近于零（−0.016），却增加一次外部调用延迟与成本。作为可选项保留，`RERANKER_ENABLED=true` 一键开启。
 - **为什么双存储后端**：本地开发与 CI 用 SQLite（零配置、可离线），生产用 pgvector（HNSW ANN、毫秒级近邻查询、与业务数据同库事务）。通过 SQLAlchemy 方言探测在启动时选择向量表策略，同一套检索代码零分支。
 - **为什么 Embedding 可替换**：`TextEmbedder` 协议隔离实现细节，本地 hashing 基线保证零密钥也能跑通全链路，真实模型通过 `EMBEDDING_*` 环境变量切换。索引与查询强制同模型，混合模型直接返回 409 而非产出无意义相似度。
+- **为什么分块带句子边界与章节溯源**：PDF 上传按 1200 字符 / 160 重叠滑窗切分，窗口末尾优先回退到句号 / 换行切断，避免把句子劈成两半；章节标题被识别为 section_title 供 citations 引用（语料库基准则用 900/120 纯滑窗并携带 doc_id）。
 - **为什么密钥默认内置但永不入库**：本地 `.env` 内置真实演示密钥实现零配置一键运行，`.env` 被 gitignore 且 GitHub push protection 会拦截密钥提交；`.env.example` 只保留变量名模板。
 - **为什么鉴权可选**：本地演示与 CI 默认开放（`RAG_API_KEY` 留空），生产通过容器环境注入 `RAG_API_KEY` 启用；`/insight`、静态资源、健康检查始终免鉴权，保证页面可被直接打开。
 - **为什么支持运行时密钥轮换**：`verify_api_key` 每次请求实时读取环境变量，因此轮换端点只需更新 `os.environ` 并落盘 `.env`，旧 key 当场失效、无需重启容器；轮换动作本身由独立 `ADMIN_KEY` 保护。
