@@ -489,14 +489,18 @@ def create_app(
 
     @app.get("/insight", response_class=FileResponse, include_in_schema=False)
     def frontend_index() -> FileResponse:
-        index_path = Path(__file__).resolve().parent.parent.parent / "frontend" / "index.html"
+        # When installed as a package, __file__ lives in site-packages, so the
+        # frontend is located via FRONTEND_DIR (set to /app/frontend in the
+        # image) and falls back to the repo layout for local development.
+        frontend_dir = Path(os.getenv("FRONTEND_DIR", str(Path(__file__).resolve().parent.parent.parent / "frontend"))).resolve()
+        index_path = frontend_dir / "index.html"
         if index_path.exists():
             return FileResponse(index_path)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="frontend not bundled")
 
-    static_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
-    if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    frontend_dir = Path(os.getenv("FRONTEND_DIR", str(Path(__file__).resolve().parent.parent.parent / "frontend"))).resolve()
+    if frontend_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
 
     return app
 
