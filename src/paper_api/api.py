@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, status
@@ -17,6 +18,7 @@ from .database import (
     create_tables,
     get_session,
 )
+from .vector_store import ensure_vector_table
 from .answer_evaluation import (
     AnswerEvaluationCase,
     LLMNotConfiguredForJudgingError,
@@ -75,9 +77,16 @@ def create_app(
     upload_root: Path = UPLOAD_ROOT,
     embedder: TextEmbedder | None = None,
 ) -> FastAPI:
+    # Deployment overrides the database backend via DATABASE_URL (e.g. a
+    # pgvector instance). Tests keep passing an explicit sqlite URL, so this
+    # only takes effect when the variable is actually set.
+    database_url = os.getenv("DATABASE_URL", database_url)
     engine = create_engine_for_url(database_url)
     session_factory = create_session_factory(engine)
     create_tables(engine)
+    if engine.dialect.name == "postgresql":
+        with session_factory() as init_session:
+            ensure_vector_table(init_session)
 
     app = FastAPI(
         title="Paper Reading Assistant API",
