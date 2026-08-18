@@ -45,3 +45,4 @@ learn/
 .idea/
 .DS_Store
 Thumbs.db
+.venv-test/

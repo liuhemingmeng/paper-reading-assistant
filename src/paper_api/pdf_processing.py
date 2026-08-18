@@ -109,26 +109,49 @@ def split_text(text: str, max_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERL
 
 
 def chunk_pages(pages: list[ExtractedPage]) -> list[TextChunk]:
+    """Split page text into paragraph-level chunks with source metadata.
+
+    PyMuPDF's ``get_text`` returns one text line per row, so real papers would
+    otherwise be cut into one chunk per line (sentence fragments). Instead we
+    join consecutive non-blank lines into paragraphs (blank line = paragraph
+    boundary, heading line = new section) and only then split long paragraphs
+    with :func:`split_text`, which keeps sentence boundaries intact.
+    """
     chunks: list[TextChunk] = []
     section_title: str | None = None
     sequence = 1
 
-    for page in pages:
-        paragraphs = [paragraph.strip() for paragraph in page.text.split("\n") if paragraph.strip()]
-        for paragraph in paragraphs:
-            if looks_like_heading(paragraph):
-                section_title = paragraph
-                continue
-            for content in split_text(paragraph):
-                chunks.append(
-                    TextChunk(
-                        sequence=sequence,
-                        page_number=page.page_number,
-                        section_title=section_title,
-                        content=content,
-                    )
+    def emit(page_number: int, buffer: list[str]) -> None:
+        nonlocal sequence
+        if not buffer:
+            return
+        paragraph = " ".join(buffer)
+        for content in split_text(paragraph):
+            chunks.append(
+                TextChunk(
+                    sequence=sequence,
+                    page_number=page_number,
+                    section_title=section_title,
+                    content=content,
                 )
-                sequence += 1
+            )
+            sequence += 1
+
+    for page in pages:
+        buffer: list[str] = []
+        for raw_line in page.text.split("\n"):
+            line = raw_line.strip()
+            if not line:
+                emit(page.page_number, buffer)
+                buffer = []
+                continue
+            if looks_like_heading(line):
+                emit(page.page_number, buffer)
+                buffer = []
+                section_title = line
+                continue
+            buffer.append(line)
+        emit(page.page_number, buffer)
     if not chunks:
         raise PDFProcessingError("The PDF has text but no usable paragraphs")
     return chunks
